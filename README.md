@@ -51,12 +51,12 @@ SimekiriKyokan/
 ```
 
 ## 使用技術
-・Python 3.11
-・PyQt6
-・openpyxl
-・pandas
-・Windows Task Scheduler
-・Inno Setup
+- Python 3.11
+- PyQt6
+- openpyxl
+- pandas
+- Windows Task Scheduler
+- Inno Setup
 
 ## 🛠 開発環境構築（開発者向け）
 ```bash
