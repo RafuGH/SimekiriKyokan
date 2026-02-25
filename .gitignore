@@ -205,3 +205,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# SimekiriKyokan specific
+gui_error_log.txt
+*.json
+Output/
+*.exe
+
+# Windows
+Thumbs.db
+desktop.ini
