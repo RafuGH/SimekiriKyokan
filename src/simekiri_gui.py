@@ -13,9 +13,6 @@ from PyQt6.QtCore import QTime, QDate, Qt
 from PyQt6.QtGui import QColor
 from functools import partial
 
-# ===============================
-# 管理者権限
-# ===============================
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
@@ -24,9 +21,6 @@ def is_admin():
 
 ShellExecuteW = ctypes.windll.shell32.ShellExecuteW
 
-# ===============================
-# パス
-# ===============================
 APP_DIR = os.path.join(os.environ["LOCALAPPDATA"], "SimekiriKyokan")
 os.makedirs(APP_DIR, exist_ok=True)
 
@@ -42,16 +36,11 @@ def get_task_name(deadline_id):
 
 ADMIN_FLAG = "--admin-register"
 
-
 def generate_deadline_id(category, end_date_str, title):
     safe_title = re.sub(r'[^a-zA-Z0-9ぁ-んァ-ン一-龯]', '', title)[:10]
     uid = uuid.uuid4().hex[:6]
     return f"{category}_{safe_title}_{uid}"
 
-
-# ===============================
-# タスク存在確認
-# ===============================
 def task_exists(deadline_id):
     try:
         import win32com.client
@@ -62,9 +51,6 @@ def task_exists(deadline_id):
     except:
         return False
 
-# ===============================
-# タスク一覧取得
-# ===============================
 def get_simekiri_tasks():
     import win32com.client
 
@@ -89,11 +75,6 @@ def get_simekiri_tasks():
 
     return result
 
-
-
-# ===============================
-# タスク有効/無効切り替え
-# ===============================
 def set_task_enabled(task_name, enabled):
     import win32com.client
 
@@ -104,17 +85,9 @@ def set_task_enabled(task_name, enabled):
     task = root.GetTask(task_name)
     task.Enabled = enabled
 
-
-# ===============================
-# タスクごとのconfigパス取得
-# ===============================
 def get_task_config_path(deadline_id):
     return os.path.join(APP_DIR, f"{deadline_id}.json")
 
-
-# ===============================
-# タスク登録（管理者）
-# ===============================
 def register_task_admin(config):
     import win32com.client
 
@@ -124,7 +97,6 @@ def register_task_admin(config):
     service.Connect()
     root = service.GetFolder("\\")
 
-    # 必ず削除してから作り直す
     try:
         root.DeleteTask(task_name, 0)
     except:
@@ -132,9 +104,6 @@ def register_task_admin(config):
 
     task_def = service.NewTask(0)
 
-    # ===============================
-    # 日時計算
-    # ===============================
     h, m = map(int, config["notify_time"].split(":"))
     start_date = datetime.strptime(config["start_date"], "%Y-%m-%d")
     end_date = datetime.strptime(config["end_date"], "%Y-%m-%d")
@@ -142,36 +111,26 @@ def register_task_admin(config):
     start = start_date.replace(hour=h, minute=m, second=0)
     end = end_date.replace(hour=23, minute=59, second=59)
 
-    # ===============================
-    # トリガー
-    # ===============================
     trigger = task_def.Triggers.Create(2)
     trigger.StartBoundary = start.strftime("%Y-%m-%dT%H:%M:%S")
     trigger.EndBoundary = end.strftime("%Y-%m-%dT%H:%M:%S")
     trigger.DaysInterval = max(1, config["notify_interval_days"])
     trigger.Enabled = True
 
-    # ===============================
-    # アクション
-    # ===============================
     action = task_def.Actions.Create(0)
-    
     if getattr(sys, 'frozen', False):
-        # exe実行時
+        # exe時
         action.Path = sys.executable
         config_path = get_config_path(config["deadline_id"])
         action.Arguments = f'--notify "{config_path}"'
         action.WorkingDirectory = os.path.dirname(sys.executable)
     else:
-        # Python実行時
+        # Python時
         action.Path = sys.executable
         config_path = get_config_path(config["deadline_id"])
         action.Arguments = f'"{os.path.abspath(__file__)}" --notify "{config_path}"'
         action.WorkingDirectory = os.path.dirname(os.path.abspath(__file__))
 
-    # ===============================
-    # ユーザー設定
-    # ===============================
     task_def.Principal.LogonType = 3
     task_def.Principal.RunLevel = 0
 
@@ -190,13 +149,9 @@ def register_task_admin(config):
         3
     )
 
-
     config["task_registered"] = True
 
-
-# ===============================
-# メンション行
-# ===============================
+# メンション欄
 class RowInput(QWidget):
     def __init__(self, short_ph, long_ph, parent_layout, deletable=True):
         super().__init__()
@@ -245,10 +200,7 @@ class RowInput(QWidget):
     def get(self):
         return self.short.text(), self.long.text()
 
-
-# ===============================
-# GUI
-# ===============================
+# 本体GUI
 class NotifierApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -257,7 +209,6 @@ class NotifierApp(QWidget):
 
         layout = QVBoxLayout(self)
 
-        # ===== 締切名＋ヘルプ =====
         title_row = QHBoxLayout()
 
         title_label = QLabel("締切名")
@@ -265,14 +216,13 @@ class NotifierApp(QWidget):
         palette = self.palette()
         base_color = palette.color(palette.ColorRole.Window)
         
-        # 明度で判定（128より暗ければダーク）
+        # 128より暗ければダークモード
         is_dark = base_color.lightness() < 128
 
         self.help_btn = QPushButton("？")
         self.help_btn.setFixedSize(24, 24)
         
         if is_dark:
-            # ダークモード（今のまま＋少し明るくなる）
             self.help_btn.setStyleSheet("""
                 QPushButton {
                     font-size:14px;
@@ -289,7 +239,6 @@ class NotifierApp(QWidget):
                 }
             """)
         else:
-            # ライトモード（白ベースのグレー）
             self.help_btn.setStyleSheet("""
                 QPushButton {
                     font-size:14px;
@@ -313,18 +262,18 @@ class NotifierApp(QWidget):
         title_row.addWidget(self.help_btn)
         
         layout.addLayout(title_row)
+
         
-        # 締切名入力欄
         self.title_input = QLineEdit()
         layout.addWidget(self.title_input)
 
+        
         layout.addWidget(QLabel("カテゴリ"))
         self.category_combo = QComboBox()
         self.category_combo.addItems(["report", "game", "school", "work", "personal"])
         layout.addWidget(self.category_combo)
 
 
-        # Excel
         layout.addWidget(QLabel("Excelファイル"))
         excel_l = QHBoxLayout()
         self.excel_input = QLineEdit()
@@ -334,23 +283,23 @@ class NotifierApp(QWidget):
         excel_l.addWidget(btn)
         layout.addLayout(excel_l)
         
-        # Excel生成ボタン
+
         self.gen_excel_btn = QPushButton("Excelを生成")
         self.gen_excel_btn.clicked.connect(self.generate_excel)
         layout.addWidget(self.gen_excel_btn)
 
-        # Webhook
+
         layout.addWidget(QLabel("Discord Webhook URL"))
         self.webhook_input = QLineEdit()
         layout.addWidget(self.webhook_input)
 
-        # 日前
+
         layout.addWidget(QLabel("締切何日前に通知"))
         self.days_spin = QSpinBox()
         self.days_spin.setRange(0, 60)
         layout.addWidget(self.days_spin)
 
-        # メンション
+
         self.mention_checkbox = QCheckBox("メンションを有効（任意）")
         layout.addWidget(self.mention_checkbox)
 
@@ -361,19 +310,16 @@ class NotifierApp(QWidget):
         self.mention_layout.addWidget(RowInput("担当名", "ユーザーID", self.mention_layout, False))
         layout.addWidget(mention_box)
 
-        # 自動連絡
         layout.addWidget(QLabel("──────── 自動連絡 ────────"))
         self.auto_checkbox = QCheckBox("自動連絡を有効（任意）")
         layout.addWidget(self.auto_checkbox)
 
-        # 時刻
         t_l = QHBoxLayout()
         t_l.addWidget(QLabel("連絡時刻"))
         self.time_edit = QTimeEdit(QTime(9, 0))
         t_l.addWidget(self.time_edit)
         layout.addLayout(t_l)
 
-        # 頻度
         i_l = QHBoxLayout()
         i_l.addWidget(QLabel("連絡頻度（日）"))
         self.interval_spin = QSpinBox()
@@ -381,7 +327,6 @@ class NotifierApp(QWidget):
         i_l.addWidget(self.interval_spin)
         layout.addLayout(i_l)
 
-        # 制作期間
         layout.addWidget(QLabel("制作期間"))
         d_l = QHBoxLayout()
         self.start_date = QDateEdit(QDate.currentDate())
@@ -394,7 +339,6 @@ class NotifierApp(QWidget):
         d_l.addWidget(self.end_date)
         layout.addLayout(d_l)
 
-        # ボタン
         self.save_btn = QPushButton("新規作成")
         self.run_btn = QPushButton("通知テスト実行")
         self.list_btn = QPushButton("締切教官管理")
@@ -408,9 +352,7 @@ class NotifierApp(QWidget):
 
         self.config = {}
 
-    # ===============================
     # 既存ロジック（完全保持）
-    # ===============================
     def run_as_admin_and_register(self):
 
         if not is_admin():
@@ -476,9 +418,7 @@ class NotifierApp(QWidget):
         if p:
             self.excel_input.setText(p)
 
-    # ===============================
     # マニュアルを開く
-    # ===============================
     def open_manual(self):
         try:
             if getattr(sys, 'frozen', False):
@@ -489,16 +429,14 @@ class NotifierApp(QWidget):
             pdf_path = os.path.join(base_dir, "SimekiriKyokan_Manual.pdf")
 
             if os.path.exists(pdf_path):
-                os.startfile(pdf_path)  # Windows標準PDFビューアで開く
+                os.startfile(pdf_path)  # Windows標準PDFビューアで開く。サイトだの
             else:
                 QMessageBox.warning(self, "エラー", "マニュアルPDFが見つかりません")
 
         except Exception as e:
             QMessageBox.warning(self, "エラー", f"マニュアルを開けませんでした:\n{e}")
             
-    # ===============================
-    # Excel生成（任意の場所にコピー）
-    # ===============================
+    # Excelを生成
     def generate_excel(self):
         # exe / Python 版どちらでも data/Tasks.xlsx 参照
         if getattr(sys, 'frozen', False):
@@ -574,7 +512,7 @@ class NotifierApp(QWidget):
             "end_date": end_date
         }
         
-        # ===== メンション取得 =====
+        # メンション取得
         mentions = []
         for i in range(self.mention_layout.count()):
             w = self.mention_layout.itemAt(i).widget()
@@ -646,17 +584,13 @@ class NotifierApp(QWidget):
         self.excel_input.clear()
         self.webhook_input.clear()
         self.days_spin.setValue(3)
-        
-        # ★ 追加
         self.mention_checkbox.setChecked(False)
         
-        # メンション行を完全リセット
         while self.mention_layout.count():
             w = self.mention_layout.takeAt(0).widget()
             if w:
                 w.setParent(None)
         
-        # 初期行を1つだけ追加
         self.mention_layout.addWidget(
             RowInput("担当名", "ユーザーID", self.mention_layout, False)
         )
@@ -673,7 +607,7 @@ class NotifierApp(QWidget):
             QMessageBox.warning(self, "エラー", "保存された設定がありません")
             return
     
-        # 一番新しいファイルを使う
+        # 直近ファイルを使用
         files.sort(key=lambda x: os.path.getmtime(os.path.join(APP_DIR, x)), reverse=True)
         config_path = os.path.join(APP_DIR, files[0])
     
@@ -683,13 +617,13 @@ class NotifierApp(QWidget):
         self.task_list_window = TaskManagerWindow(self)
         self.task_list_window.show()
         
-        # ===== タスク再登録 =====
+        # タスク再登録
     def update_task(self, cfg):
     
         task_name = get_task_name(cfg["deadline_id"])
         config_path = get_config_path(cfg["deadline_id"])
     
-        # ===== 管理者ならそのまま登録 =====
+        # 管理者ならそのまま登録
         if is_admin():
             try:
                 import win32com.client
@@ -707,9 +641,9 @@ class NotifierApp(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "タスク更新失敗", str(e))
     
-            return  # ★超重要
+            return
     
-        # ===== 管理者でない場合のみ昇格 =====
+        # 管理者じゃなければ昇格
         if getattr(sys, 'frozen', False):
             # exe版
             ShellExecuteW(
@@ -721,7 +655,7 @@ class NotifierApp(QWidget):
                 1
             )
         else:
-            # python実行版
+            # python版
             script_path = os.path.abspath(__file__)
             ShellExecuteW(
                 None,
@@ -736,7 +670,7 @@ class NotifierApp(QWidget):
 
 class TaskManagerWindow(QWidget):
     def __init__(self, main_app):
-        super().__init__()   # ← parent渡さない
+        super().__init__()   # ← parent渡さないらしい
         self.main_app = main_app
         self.setWindowTitle("タスク管理")
         self.resize(800, 400)
@@ -770,7 +704,7 @@ class TaskManagerWindow(QWidget):
         self.table.setRowCount(0)
 
         for row, t in enumerate(tasks):
-            display_name = t["name"]  # とりあえずタスク名をデフォルト表示
+            display_name = t["name"]
     
             # タスク名から deadline_id を復元
             if t["name"].startswith(TASK_BASE_NAME + "_"):
@@ -792,7 +726,7 @@ class TaskManagerWindow(QWidget):
                 status_text = "🟢有効"
             else:
                 status_text = "⚪実行"
-            self.table.setItem(row, 0, QTableWidgetItem(display_name))  # ← タスク名列追加
+            self.table.setItem(row, 0, QTableWidgetItem(display_name))
             self.table.setItem(row, 1, QTableWidgetItem(status_text))
             self.table.setItem(row, 2, QTableWidgetItem(t["next_run"]))
             self.table.setItem(row, 3, QTableWidgetItem(t["last_run"]))
@@ -856,7 +790,6 @@ class TaskManagerWindow(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "削除失敗", f"削除に失敗しました:\n{e}")
     
-        # 再描画
         self.load_tasks()
 
 
@@ -887,7 +820,6 @@ class TaskManagerWindow(QWidget):
     
         if dlg.exec() == QDialog.DialogCode.Accepted:
     
-            # ★ ここで再読込するだけでOK
             with open(config_path,"r",encoding="utf-8") as f:
                 updated_cfg = json.load(f)
     
@@ -897,7 +829,7 @@ class TaskManagerWindow(QWidget):
             QMessageBox.information(self,"保存完了",f"{updated_cfg.get('title','')} を更新しました")
             self.load_tasks()
 
-
+# 教官編集画面
 class TaskEditDialog(QDialog):
     def __init__(self, cfg, parent=None):
         super().__init__(parent)
@@ -906,7 +838,6 @@ class TaskEditDialog(QDialog):
         self.resize(500, 500)
         layout = QVBoxLayout(self)
 
-        # Excel
         layout.addWidget(QLabel("Excelファイル"))
         self.excel_input = QLineEdit(cfg.get("excel_path",""))
         browse_btn = QPushButton("参照")
@@ -916,12 +847,10 @@ class TaskEditDialog(QDialog):
         excel_layout.addWidget(browse_btn)
         layout.addLayout(excel_layout)
 
-        # Webhook
         layout.addWidget(QLabel("Discord Webhook URL"))
         self.webhook_input = QLineEdit(cfg.get("webhook_url",""))
         layout.addWidget(self.webhook_input)
 
-        # 日数・チェックボックス・時間など
         self.days_spin = QSpinBox()
         self.days_spin.setRange(0,60)
         self.days_spin.setValue(cfg.get("days_before_deadline",3))
@@ -932,7 +861,6 @@ class TaskEditDialog(QDialog):
         self.mention_checkbox.setChecked(cfg.get("mention_enabled",False))
         layout.addWidget(self.mention_checkbox)
         
-        # 担当者（＋ーで追加）
         self.mention_box = QWidget()
         self.mention_layout = QVBoxLayout(self.mention_box)
         self.mention_layout.setContentsMargins(0,0,0,0)
@@ -993,7 +921,7 @@ class TaskEditDialog(QDialog):
         self.cfg["notify_time"] = self.time_edit.time().toString("HH:mm")
         self.cfg["notify_interval_days"] = self.interval_spin.value()
     
-        # 担当者
+
         mentions = []
         for i in range(self.mention_layout.count()):
             w = self.mention_layout.itemAt(i).widget()
@@ -1004,20 +932,17 @@ class TaskEditDialog(QDialog):
         
         self.cfg["mentions"] = mentions
     
-        # 保存
+
         config_path = get_config_path(self.cfg["deadline_id"])
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(self.cfg, f, ensure_ascii=False, indent=2)
 
         self.accept()
 
-# ===============================
-# 起動
-# ===============================
 if __name__ == "__main__":
     try:
 
-        # ===== 通知モード =====
+        # 通知モード
         if "--notify" in sys.argv:
             config_index = sys.argv.index("--notify") + 1
             config_path = sys.argv[config_index] if len(sys.argv) > config_index else None
@@ -1065,7 +990,7 @@ if __name__ == "__main__":
                 sys.exit(0)
 
 
-        # ===== 通常GUI起動 =====
+        # 通常GUI起動
         app = QApplication(sys.argv)
         win = NotifierApp()
         win.show()
@@ -1074,3 +999,4 @@ if __name__ == "__main__":
     except Exception:
         with open(ERROR_LOG, "w", encoding="utf-8") as f:
             f.write(traceback.format_exc())
+
