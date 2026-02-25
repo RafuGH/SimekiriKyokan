@@ -1,0 +1,6 @@
+PyQt6
+pandas
+openpyxl
+pillow
+requests
+pywin32
