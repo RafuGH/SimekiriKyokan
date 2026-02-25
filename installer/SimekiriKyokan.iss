@@ -17,24 +17,18 @@ PrivilegesRequired=admin
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
 
 [Tasks]
-; デスクトップアイコンのみ選択式
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 
 [Files]
-; メインアプリ
 Source: "dist\simekiri_gui\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
-; Excelテンプレ（内部用）
 Source: "data\Tasks.xlsx"; DestDir: "{app}"; Flags: ignoreversion
 
-; PDFマニュアル（内部用）
 Source: "data\SimekiriKyokan_Manual.pdf"; DestDir: "{app}"; Flags: ignoreversion
 
-; アイコン
 Source: "data\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-; 本体のみ
 Name: "{group}\締切教官"; Filename: "{app}\simekiri_gui.exe"; IconFilename: "{app}\icon.ico"
 Name: "{autodesktop}\締切教官"; Filename: "{app}\simekiri_gui.exe"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"
 
@@ -58,4 +52,5 @@ begin
 end;
 
 [UninstallDelete]
+
 Type: filesandordirs; Name: "{app}"
