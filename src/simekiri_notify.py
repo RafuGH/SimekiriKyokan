@@ -15,7 +15,7 @@ import textwrap
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-LOG_FILE = None  # ← 追加
+LOG_FILE = None
 
 def write_log(message):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -46,12 +46,12 @@ def run_notify(config_path=None, test_mode=False):
     global LOG_FILE
     LOG_FILE = os.path.join(APP_DIR, "simekiri_run_log.txt")
 
-    # ---- args ----
+    # ---- args ----？？？らしい
     print("ARGV:", sys.argv)
     CONFIG_PATH = config_path
     print("CONFIG_PATH:", CONFIG_PATH)
     
-    # ---- load config ----
+    # config読み
     if not config_path:
         print("ERROR: config_path is None")
         return 1
@@ -62,24 +62,18 @@ def run_notify(config_path=None, test_mode=False):
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         config = json.load(f)
     
-    # -------------------------
-    # Webhook
-    # -------------------------
+    # Webhook読み
     WEBHOOK_URL = config.get("webhook_url")
     if not WEBHOOK_URL:
         write_log("Webhook URL is missing")
         return 1
     
-    # -------------------------
-    # 通知設定
-    # -------------------------
+    # 通知設定読み
     DAYS_BEFORE = config.get("days_before_deadline", 3)
     MENTION_ENABLED = config.get("mention_enabled", False)
     MENTION_MAP = config.get("mentions", {})
     
-    # -------------------------
-    # ★ ここ重要：list → dict 変換
-    # -------------------------
+    # list → dict
     if isinstance(MENTION_MAP, list):
         write_log("mentions is list → converting to dict")
     
@@ -99,9 +93,7 @@ def run_notify(config_path=None, test_mode=False):
     write_log(f"MENTION_ENABLED={MENTION_ENABLED}")
     write_log(f"MENTION_MAP={MENTION_MAP}")
     
-    # -------------------------
-    # Test notify mode
-    # -------------------------
+    # テスト通知実行
     IS_TEST = test_mode
     
     if IS_TEST:
@@ -127,10 +119,8 @@ def run_notify(config_path=None, test_mode=False):
             write_log("Test notify failed: " + repr(e))
             return 1
         
-    # -------------------------
     # Paths and logging helpers
-    # -------------------------
-    
+    # ↑？？？↓
     # fallback log dir: try BASE_DIR, if not writable use LOCALAPPDATA
     def _choose_log_dir():
         try:
@@ -190,13 +180,7 @@ def run_notify(config_path=None, test_mode=False):
             except Exception:
                 return pd.NaT
     
-        # -------------------------
-        # Create images dir
-        # -------------------------
-    
-        # -------------------------
-        # Read Excel
-        # -------------------------
+        # エクセル読み / 画像生成
         try:
             df = pd.read_excel(
                 EXCEL_FILE,
@@ -204,13 +188,13 @@ def run_notify(config_path=None, test_mode=False):
                 usecols="C:K"
             )
 
-            # ---- Excelの列幅を取得（B列スタートで同期） ----
+            # Excelの列幅取得（B列スタートで同期）
             wb = load_workbook(EXCEL_FILE)
             ws = wb["作業リスト"]
             
             excel_width_map = {}
             
-            start_col_index = 3  # ← C列から開始（A=1, B=2）
+            start_col_index = 3  # ← C列から開始って意味（A=1, B=2）
             
             for i, col_name in enumerate(df.columns):
                 excel_col_index = start_col_index + i
@@ -218,7 +202,7 @@ def run_notify(config_path=None, test_mode=False):
                 dim = ws.column_dimensions.get(letter)
             
                 if dim and dim.width:
-                    # Excel列幅 → ピクセル換算（経験則係数）
+                    # Excel列幅 → ピクセル換算（経験則係数）←？？？
                     pixel_width = int(dim.width * 8.2 + 12)
                     excel_width_map[col_name] = pixel_width
                 else:
@@ -229,7 +213,7 @@ def run_notify(config_path=None, test_mode=False):
 
             write_log("COLUMNS: " + str(list(df.columns)))
 
-            # ---- 必須列チェック（Task化前の前提） ----
+            # 必須列チェック（Task化前の前提）下記の項目が未入力では通知されない
             REQUIRED_COLUMNS = ["内容", "締切", "担当", "進捗"]
     
             COLUMN_ORDER = list(df.columns)
@@ -247,7 +231,7 @@ def run_notify(config_path=None, test_mode=False):
                 write_log(f"Missing columns: {missing}")
                 return 1
                 
-            # ---- 担当が空の行は作業として扱わない ----
+            # 担当が空の行は除外
             df = df[df["担当"].notna()]
             df = df[df["担当"].astype(str).str.strip() != ""]
     
@@ -255,7 +239,7 @@ def run_notify(config_path=None, test_mode=False):
             write_log("Failed to read excel: " + repr(e))
             raise
     
-        # cleanup columns
+        # いらない列を除外（空白列だの）
         df.columns = df.columns.str.strip()
         df = df.drop(columns=[c for c in df.columns if "Unnamed" in c or c == "目次"], errors="ignore")
     
@@ -265,21 +249,19 @@ def run_notify(config_path=None, test_mode=False):
         df["進捗_raw"] = df["進捗"]  # 元文字列保持
         df["進捗"] = df["進捗"].apply(convert_done)
 	
-        # normalize 締切
+        # normalize 締切　←？
         df["締切"] = df["締切"].apply(convert_deadline_value)
         df = df.dropna(subset=["内容", "締切"])
     
     
-        # ensure datetime dtype
+        # ensure datetime dtype　← 多分日付
         if not pd.api.types.is_datetime64_any_dtype(df["締切"]):
             df["締切"] = pd.to_datetime(df["締切"], errors="coerce")
     
         today = datetime.now().date()
         today_str = today.strftime("%Y%m%d")
     
-        # -------------------------
         # compute rates
-        # -------------------------
         total_tasks = len(df)
         completed_tasks = int(df["進捗"].sum()) if "進捗" in df else 0
         overall_rate = round((completed_tasks / total_tasks) * 100) if total_tasks > 0 else 0
@@ -291,9 +273,6 @@ def run_notify(config_path=None, test_mode=False):
                 done = int(g["進捗"].sum())
                 person_rates[str(person).strip()] = round((done / total) * 100) if total > 0 else 0
     
-        # -------------------------
-        # pick pending tasks
-        # -------------------------
         df["days_left"] = (df["締切"].dt.date - today)
         df["days_left"] = df["days_left"].apply(lambda x: x.days if pd.notna(x) else 9999)
         
@@ -309,7 +288,6 @@ def run_notify(config_path=None, test_mode=False):
         ]
     
         if pending.empty:
-            # send small message (wrapped in try/except)
             try:
                 r = requests.post(WEBHOOK_URL, json={"content": "🎉 締切の近い、または過ぎた作業は現在ありません。"})
                 write_log(f"No pending tasks. webhook status: {getattr(r,'status_code', 'N/A')}")
@@ -317,16 +295,15 @@ def run_notify(config_path=None, test_mode=False):
                 write_log("Webhook send failed (no pending): " + repr(e))
             return 0
     
-        # -------------------------
-        # image builder
-        # -------------------------
+        # Embedの色分け
         STYLE_MAP = {
-            "デザイナー": {"color": 0xFFD700},
-            "プログラマー": {"color": 0x1E90FF},
-            "サウンド": {"color": 0xFFA500},
-            "未設定": {"color": 0x808080},
+            "デザイナー": {"color": 0xFFD700},	#黄色
+            "プログラマー": {"color": 0x1E90FF},	#青
+            "サウンド": {"color": 0xFFA500},		#オレンジ
+            "未設定": {"color": 0x808080},		#グレー
         }
-    
+
+		# 折り返す文字数
         WRAP_RULES = {
             "職種": 8,
             "分類": 10,
@@ -422,7 +399,6 @@ def run_notify(config_path=None, test_mode=False):
             img = Image.new("RGB", (total_width, total_height), "white")
             draw = ImageDraw.Draw(img)
         
-            # タイトル描画
             title = f"{name} の締切が近い、または過ぎた作業（完了率 {rate}%）"
             try:
                 title_w = draw.textbbox((0,0), title, font=title_font)[2]
@@ -470,9 +446,7 @@ def run_notify(config_path=None, test_mode=False):
             buffer.seek(0)
             return buffer
         
-        # -------------------------
-        # Build and send notifications per person
-        # -------------------------
+        # 個別送信
         all_embeds = []
         errors = []
         
@@ -504,7 +478,7 @@ def run_notify(config_path=None, test_mode=False):
             representative_job = str(group.iloc[0].get("職種", "未設定")).strip()
             embed_color = STYLE_MAP.get(representative_job, STYLE_MAP["未設定"])["color"]
         
-            # ✅ ここから担当者ごとの lines
+            # 担当者ごとのEmbed
             lines = []
         
             for _, row in group.iterrows():
@@ -540,7 +514,7 @@ def run_notify(config_path=None, test_mode=False):
         
             all_embeds.append(embed)
         
-        # ← for の外に戻る
+        # for の外に戻る
         
         all_embeds = all_embeds[:10]
 
@@ -578,11 +552,12 @@ def run_notify(config_path=None, test_mode=False):
         return 0
     
     except Exception:
-        # write error trace to err file in safe dir and log
+        # エラーを記録
         try:
             with open(ERR_FILE, "w", encoding="utf-8") as f:
                 f.write(traceback.format_exc())
         except Exception:
             pass
         write_log("EXCEPTION: see " + ERR_FILE)
+
         return 1
