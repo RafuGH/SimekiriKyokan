@@ -66,6 +66,7 @@ pip install -r requirements.txt
 python simekiri_gui.py
 
 pyinstaller src/simekiri_gui.py --onefile --clean --icon=data/icon.ico
+```
 
 ## 🔐 Security
 
