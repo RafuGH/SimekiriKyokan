@@ -34,21 +34,20 @@ Excelと連携する Windows用締切通知アプリ
 ```
 SimekiriKyokan/
 │
-├─ src/                      # Pythonソースコード
-│   ├─ simekiri_gui.py
-│   ├─ simekiri_notify.py
-│   └─ simekiri_register.py
-│
-├─ data/                     # Excelテンプレート・マニュアル
+├─ assets/                     # Excelテンプレート・マニュアル
+│   ├─ SimekiriKyokan_Manual.pdf
 │   ├─ Tasks.xlsx
-│   ├─ icon.ico
-│   └─ SimekiriKyokan_Manual.pdf
+│   └─ icon.ico
 │
 ├─ installer/                # Inno Setup スクリプト
-│   └─ setup.iss
+│   └─ SimekiriKyokan.iss
 │
-├─ requirements.txt
-└─ README.md
+├─ src/                      # Pythonソースコード
+│   ├─ simekiri_gui.py
+│   └─ simekiri_notify.py
+│
+├─ README.md
+└─ requirements.txt
 ```
 
 ## 使用技術
