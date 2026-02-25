@@ -3,7 +3,6 @@ Excelと連携する Windows用締切通知アプリ
 (Python / PyQt6 / Inno Setup)
 
 ## 📌 概要
-
 締切教官は、Excelで管理している作業の締切をDiscordで自動通知するデスクトップアプリです。
 ・シンプルなGUI操作 
 ・締切〇日前に通知 
