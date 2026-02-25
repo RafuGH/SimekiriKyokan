@@ -52,5 +52,4 @@ begin
 end;
 
 [UninstallDelete]
-
 Type: filesandordirs; Name: "{app}"
