@@ -438,13 +438,12 @@ class NotifierApp(QWidget):
             
     # Excelを生成
     def generate_excel(self):
-        # exe / Python 版どちらでも data/Tasks.xlsx 参照
         if getattr(sys, 'frozen', False):
             base_dir = os.path.dirname(sys.executable)
         else:
             base_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        template_path = os.path.join(base_dir, "data", "Tasks.xlsx")
+    
+        template_path = os.path.join(base_dir, "Tasks.xlsx")
         
         if not os.path.exists(template_path):
             QMessageBox.critical(self, "エラー", f"テンプレート Excel が見つかりません:\n{template_path}")
@@ -999,4 +998,5 @@ if __name__ == "__main__":
     except Exception:
         with open(ERROR_LOG, "w", encoding="utf-8") as f:
             f.write(traceback.format_exc())
+
 
