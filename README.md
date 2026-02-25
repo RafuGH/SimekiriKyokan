@@ -66,3 +66,8 @@ pip install -r requirements.txt
 python simekiri_gui.py
 
 pyinstaller src/simekiri_gui.py --onefile --clean --icon=data/icon.ico
+
+## 🔐 Security
+
+VirusTotal scan result:
+[https://www.virustotal.com/gui/file/xxxxxxxxxxxxxxxx](https://www.virustotal.com/gui/file/98d7a1721b0a6552bf4bd5c0ee402948a48be05325c39769f12af2c8462c5897/detection)
