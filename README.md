@@ -49,6 +49,11 @@ SimekiriKyokan/
 └─ requirements.txt
 ```
 
+## 今後の予定
+- Googleスプレッドシート対応
+- Teams, Slack対応
+- 確認待ちの締切通知を受け取る人の指定
+
 ## 使用技術
 ・Python 3.11
 ・PyQt6
