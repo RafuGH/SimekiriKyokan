@@ -655,6 +655,28 @@ class TaskManagerWindow(QWidget):
         self.refresh_btn.clicked.connect(self.load_tasks)
         self.load_tasks()
 
+    @staticmethod
+    def _format_task_time(raw: str) -> str:
+        """
+        タスクスケジューラの日時文字列を整形する。
+        未実行時に返される 1999-11-30 はWindows の未実行デフォルト値なので
+        「未実行」と表示する。次回実行が過去日時の場合も考慮。
+        """
+        if not raw or raw.strip() == "":
+            return "－"
+        # 1999-11-30 はWindowsタスクスケジューラの「未実行」デフォルト値
+        if raw.startswith("1999-11-30"):
+            return "未実行"
+        # datetime文字列を見やすく整形（タイムゾーン部分を除去）
+        try:
+            # "2025-06-01 09:00:00+09:00" → "2025-06-01 09:00"
+            dt_str = raw.split("+")[0].split(".")[0].strip()
+            from datetime import datetime as _dt
+            dt = _dt.fromisoformat(dt_str)
+            return dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return raw
+
     def load_tasks(self):
         tasks = get_simekiri_tasks()
         self.table.setRowCount(0)
@@ -681,8 +703,8 @@ class TaskManagerWindow(QWidget):
 
             self.table.setItem(row, 0, QTableWidgetItem(display_name))
             self.table.setItem(row, 1, QTableWidgetItem(status_text))
-            self.table.setItem(row, 2, QTableWidgetItem(t["next_run"]))
-            self.table.setItem(row, 3, QTableWidgetItem(t["last_run"]))
+            self.table.setItem(row, 2, QTableWidgetItem(self._format_task_time(t["next_run"])))
+            self.table.setItem(row, 3, QTableWidgetItem(self._format_task_time(t["last_run"])))
             self.table.setItem(row, 4, QTableWidgetItem(str(t["last_result"])))
 
             btn_widget = QWidget()
