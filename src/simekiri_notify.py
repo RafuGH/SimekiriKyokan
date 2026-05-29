@@ -434,16 +434,19 @@ def run_notify(config_path=None, test_mode=False):
         else:
             not_unnecessary = True
 
+        # 確認待ちは担当者通知から除外し、レビュアーにのみ通知する
+        is_review_waiting = df["進捗_raw"].astype(str).str.strip() == "確認待ち" \
+            if "進捗_raw" in df.columns else pd.Series(False, index=df.index)
+
         pending = df[
             (df["進捗"] == False) &
+            (~is_review_waiting) &          # ← 確認待ちを除外
             not_unnecessary &
             (df["days_left"] <= DAYS_BEFORE_DEADLINE)
         ]
 
-        # ---- 確認待ちタスク（締切に関わらず全件） ----
-        review_pending = df[
-            df["進捗_raw"].astype(str).str.strip() == "確認待ち"
-        ] if "進捗_raw" in df.columns else pd.DataFrame()
+        # ---- 確認待ちタスク（締切に関わらず全件・レビュアー専用） ----
+        review_pending = df[is_review_waiting] if "進捗_raw" in df.columns else pd.DataFrame()
 
         if pending.empty and review_pending.empty:
             try:
