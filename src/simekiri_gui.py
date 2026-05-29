@@ -964,6 +964,34 @@ class TaskEditDialog(QDialog):
         i_layout.addWidget(self.interval_spin)
         layout.addLayout(i_layout)
 
+        # ---- 制作期間 ----
+        layout.addWidget(QLabel("制作期間"))
+        d_layout = QHBoxLayout()
+
+        start_str = cfg.get("start_date", QDate.currentDate().toString("yyyy-MM-dd"))
+        end_str   = cfg.get("end_date",   QDate.currentDate().addYears(1).toString("yyyy-MM-dd"))
+        try:
+            s_date = QDate.fromString(start_str, "yyyy-MM-dd")
+            e_date = QDate.fromString(end_str,   "yyyy-MM-dd")
+            if not s_date.isValid():
+                s_date = QDate.currentDate()
+            if not e_date.isValid():
+                e_date = QDate.currentDate().addYears(1)
+        except Exception:
+            s_date = QDate.currentDate()
+            e_date = QDate.currentDate().addYears(1)
+
+        self.start_date_edit = QDateEdit(s_date)
+        self.start_date_edit.setCalendarPopup(True)
+        self.end_date_edit   = QDateEdit(e_date)
+        self.end_date_edit.setCalendarPopup(True)
+
+        d_layout.addWidget(QLabel("開始日"))
+        d_layout.addWidget(self.start_date_edit)
+        d_layout.addWidget(QLabel("終了日"))
+        d_layout.addWidget(self.end_date_edit)
+        layout.addLayout(d_layout)
+
         save_btn = QPushButton("設定を保存")
         save_btn.clicked.connect(self.save)
         layout.addWidget(save_btn)
@@ -1012,6 +1040,8 @@ class TaskEditDialog(QDialog):
         self.cfg["auto_notify"]              = self.auto_checkbox.isChecked()
         self.cfg["notify_time"]              = self.time_edit.time().toString("HH:mm")
         self.cfg["notify_interval_days"]     = self.interval_spin.value()
+        self.cfg["start_date"]               = self.start_date_edit.date().toString("yyyy-MM-dd")
+        self.cfg["end_date"]                 = self.end_date_edit.date().toString("yyyy-MM-dd")
 
         config_path = get_config_path(self.cfg["deadline_id"])
         with open(config_path, "w", encoding="utf-8") as f:
