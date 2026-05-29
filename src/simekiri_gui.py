@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import subprocess
 import re
 import simekiri_notify
+import google_auth_helper
 import uuid
 
 from PyQt6.QtWidgets import *
@@ -261,16 +262,20 @@ class NotifierApp(QWidget):
         self.sheets_url_input = QLineEdit()
         self.sheets_url_input.setPlaceholderText("https://docs.google.com/spreadsheets/d/...")
         sheets_vl.addWidget(self.sheets_url_input)
-        sheets_vl.addWidget(QLabel("サービスアカウント認証 JSON"))
-        sheets_hl = QHBoxLayout()
-        self.sheets_creds_input = QLineEdit()
-        btn_creds = QPushButton("参照")
-        btn_creds.clicked.connect(self.browse_credentials)
-        sheets_hl.addWidget(self.sheets_creds_input)
-        sheets_hl.addWidget(btn_creds)
-        sheets_vl.addLayout(sheets_hl)
+        
+        # Google 認可ボタン＋状態表示
+        auth_hl = QHBoxLayout()
+        self.auth_btn = QPushButton("🔐 Google で認可する")
+        self.auth_btn.clicked.connect(self._authorize_google)
+        self.auth_status_label = QLabel("❌ 未認可")
+        auth_hl.addWidget(self.auth_btn)
+        auth_hl.addWidget(self.auth_status_label)
+        auth_hl.addStretch()
+        sheets_vl.addLayout(auth_hl)
+        
         layout.addWidget(self.sheets_group)
         self.sheets_group.setVisible(False)   # 初期は非表示
+        self._update_auth_status()
 
         # ---- Webhook URL ----
         layout.addWidget(QLabel("──────── 通知先 ────────"))
@@ -377,7 +382,62 @@ class NotifierApp(QWidget):
 
         self.config = {}
 
+    def _authorize_google(self):
+        """Google Sheets の認可フローを実行"""
+        def _callback(success, message):
+            QMessageBox.information(
+                self,
+                "Google Sheets 認可",
+                message
+            ) if success else QMessageBox.warning(self, "Google Sheets 認可", message)
+            if success:
+                self._update_auth_status()
+
+        # 別スレッドで実行
+        import threading
+        t = threading.Thread(
+            target=lambda: google_auth_helper.authorize_google_sheets(_callback),
+            daemon=True
+        )
+        t.start()
+
+    def _update_auth_status(self):
+        """認可状態を表示"""
+        if google_auth_helper.has_token():
+            self.auth_status_label.setText("✅ 認可済み")
+            self.auth_btn.setEnabled(False)
+        else:
+            self.auth_status_label.setText("❌ 未認可")
+            self.auth_btn.setEnabled(True)
+
     # ---- データソース切り替え ----
+    def _authorize_google(self):
+        """Google Sheets の認可フロー"""
+        def _callback(success, message):
+            QMessageBox.information(
+                self,
+                "Google Sheets 認可",
+                message
+            ) if success else QMessageBox.warning(self, "Google Sheets 認可", message)
+            if success:
+                self._update_auth_status_edit()
+
+        import threading
+        t = threading.Thread(
+            target=lambda: google_auth_helper.authorize_google_sheets(_callback),
+            daemon=True
+        )
+        t.start()
+
+    def _update_auth_status_edit(self):
+        """認可状態を表示"""
+        if google_auth_helper.has_token():
+            self.auth_status_label.setText("✅ 認可済み")
+            self.auth_btn.setEnabled(False)
+        else:
+            self.auth_status_label.setText("❌ 未認可")
+            self.auth_btn.setEnabled(True)
+
     def _on_source_changed(self, index):
         is_sheets = (index == 1)
         self.excel_group.setVisible(not is_sheets)
@@ -391,11 +451,6 @@ class NotifierApp(QWidget):
         p, _ = QFileDialog.getOpenFileName(self, "Excelを選択", "", "Excel (*.xlsx *.xls)")
         if p:
             self.excel_input.setText(p)
-
-    def browse_credentials(self):
-        p, _ = QFileDialog.getOpenFileName(self, "認証JSONを選択", "", "JSON (*.json)")
-        if p:
-            self.sheets_creds_input.setText(p)
 
     def open_manual(self):
         try:
@@ -483,7 +538,6 @@ class NotifierApp(QWidget):
             "data_source":          "sheets" if is_sheets else "excel",
             "excel_path":           self.excel_input.text() if not is_sheets else "",
             "sheets_url":           self.sheets_url_input.text() if is_sheets else "",
-            "sheets_credentials_path": self.sheets_creds_input.text() if is_sheets else "",
             # 通知設定
             "webhook_url":          self.webhook_input.text(),
             "days_before_deadline": self.days_spin.value(),
@@ -543,7 +597,6 @@ class NotifierApp(QWidget):
         self.title_input.clear()
         self.excel_input.clear()
         self.sheets_url_input.clear()
-        self.sheets_creds_input.clear()
         self.webhook_input.clear()
         self.days_spin.setValue(3)
         self.mention_checkbox.setChecked(False)
@@ -866,16 +919,20 @@ class TaskEditDialog(QDialog):
         sheets_vl.addWidget(QLabel("スプレッドシート URL"))
         self.sheets_url_input = QLineEdit(cfg.get("sheets_url", ""))
         sheets_vl.addWidget(self.sheets_url_input)
-        sheets_vl.addWidget(QLabel("サービスアカウント認証 JSON"))
-        sheets_hl = QHBoxLayout()
-        self.sheets_creds_input = QLineEdit(cfg.get("sheets_credentials_path", ""))
-        creds_btn = QPushButton("参照")
-        creds_btn.clicked.connect(self.browse_credentials)
-        sheets_hl.addWidget(self.sheets_creds_input)
-        sheets_hl.addWidget(creds_btn)
-        sheets_vl.addLayout(sheets_hl)
+        
+        # Google 認可ボタン＋状態表示
+        auth_hl = QHBoxLayout()
+        self.auth_btn = QPushButton("🔐 Google で認可する")
+        self.auth_btn.clicked.connect(self._authorize_google)
+        self.auth_status_label = QLabel("❌ 未認可")
+        auth_hl.addWidget(self.auth_btn)
+        auth_hl.addWidget(self.auth_status_label)
+        auth_hl.addStretch()
+        sheets_vl.addLayout(auth_hl)
+        
         layout.addWidget(self.sheets_group)
         self._on_source_changed(self.source_combo.currentIndex())
+        self._update_auth_status_edit()
 
         # ---- Webhook ----
         layout.addWidget(QLabel("──────── 通知先 ────────"))
@@ -1002,6 +1059,33 @@ class TaskEditDialog(QDialog):
         save_btn.clicked.connect(self.save)
         layout.addWidget(save_btn)
 
+    def _authorize_google(self):
+        """Google Sheets の認可フロー"""
+        def _callback(success, message):
+            QMessageBox.information(
+                self,
+                "Google Sheets 認可",
+                message
+            ) if success else QMessageBox.warning(self, "Google Sheets 認可", message)
+            if success:
+                self._update_auth_status_edit()
+
+        import threading
+        t = threading.Thread(
+            target=lambda: google_auth_helper.authorize_google_sheets(_callback),
+            daemon=True
+        )
+        t.start()
+
+    def _update_auth_status_edit(self):
+        """認可状態を表示"""
+        if google_auth_helper.has_token():
+            self.auth_status_label.setText("✅ 認可済み")
+            self.auth_btn.setEnabled(False)
+        else:
+            self.auth_status_label.setText("❌ 未認可")
+            self.auth_btn.setEnabled(True)
+
     def _on_source_changed(self, index):
         is_sheets = (index == 1)
         self.excel_group.setVisible(not is_sheets)
@@ -1035,7 +1119,6 @@ class TaskEditDialog(QDialog):
         self.cfg["data_source"]              = "sheets" if is_sheets else "excel"
         self.cfg["excel_path"]               = self.excel_input.text() if not is_sheets else ""
         self.cfg["sheets_url"]               = self.sheets_url_input.text() if is_sheets else ""
-        self.cfg["sheets_credentials_path"]  = self.sheets_creds_input.text() if is_sheets else ""
         self.cfg["webhook_url"]              = self.webhook_input.text()
         self.cfg["days_before_deadline"]     = self.days_spin.value()
         self.cfg["mention_enabled"]          = self.mention_checkbox.isChecked()

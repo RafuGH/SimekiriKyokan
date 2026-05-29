@@ -251,27 +251,34 @@ def send_webhook_image(url: str, content: str, image_buffer: BytesIO) -> request
 # Google Sheets 読み込みヘルパー
 # ===================================================
 
-def load_dataframe_from_sheets(spreadsheet_url: str, credentials_path: str, sheet_name: str = "作業リスト"):
+def load_dataframe_from_sheets(spreadsheet_url: str, sheet_name: str = "作業リスト"):
     """
     Google Sheets APIでスプレッドシートを読み込み DataFrameを返す。
+    トークンは google_auth_helper から自動取得（事前に GUI で認可が必要）。
     戻り値: (df, col_width_map, row_height_base)
-    ※列幅・行高さはデフォルト値を使用する（Sheets APIでは取得不可）。
     """
     try:
         import gspread
-        from google.oauth2.service_account import Credentials
+        from google_auth_helper import get_creds, has_token
     except ImportError as e:
         raise ImportError(
             "gspread または google-auth がインストールされていません。\n"
-            "pip install gspread google-auth を実行してください。\n" + str(e)
+            "pip install gspread google-auth google-auth-oauthlib を実行してください。\n" + str(e)
         )
 
-    scopes = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_file(credentials_path, scopes=scopes)
-    gc = gspread.authorize(creds)
+    if not has_token():
+        raise ValueError(
+            "Google Sheets の認可がまだ完了していません。\n"
+            "GUI の「Google で認可する」ボタンをクリックして認可してください。"
+        )
+
+    try:
+        creds = get_creds()
+        if not creds:
+            raise ValueError("トークンの取得に失敗しました。もう一度認可してください。")
+        gc = gspread.authorize(creds)
+    except Exception as e:
+        raise ValueError(f"Google Sheets の認可に失敗しました:\n{str(e)}")
 
     # URLからスプレッドシートを開く
     sh = gc.open_by_url(spreadsheet_url)
@@ -295,15 +302,14 @@ def load_dataframe_from_sheets(spreadsheet_url: str, credentials_path: str, shee
 
     df = pd.DataFrame(data_rows, columns=headers)
 
-    # デフォルト列幅マップ（Sheets APIでは列幅取得不可のためデフォルト値）
+    # デフォルト列幅マップ
     DEFAULT_COL_WIDTH = 120
     col_width_map = {h: DEFAULT_COL_WIDTH for h in headers}
-    # よく使う列は少し広めに
     for col, w in {"内容": 160, "詳細": 200, "備考": 140, "担当": 80, "締切": 70}.items():
         if col in col_width_map:
             col_width_map[col] = w
 
-    row_height_base = 24  # デフォルト行高さ（px）
+    row_height_base = 24
 
     return df, col_width_map, row_height_base
 
@@ -425,7 +431,6 @@ def run_notify(config_path=None, test_mode=False):
 
         EXCEL_FILE    = config.get("excel_path", "")
         SHEETS_URL    = config.get("sheets_url", "")
-        SHEETS_CREDS  = config.get("sheets_credentials_path", "")
         DATA_SOURCE   = config.get("data_source", "excel")  # "excel" or "sheets"
 
         WEBHOOK_URL           = config.get("webhook_url", "")
@@ -459,14 +464,11 @@ def run_notify(config_path=None, test_mode=False):
             if not SHEETS_URL:
                 write_log("sheets_url is missing")
                 return 1
-            if not SHEETS_CREDS or not os.path.exists(SHEETS_CREDS):
-                write_log(f"sheets_credentials_path が見つかりません: {SHEETS_CREDS}")
-                return 1
 
             write_log(f"Google Sheets から読み込み中: {SHEETS_URL}")
             try:
                 df, COL_WIDTH_MAP, row_height_base = load_dataframe_from_sheets(
-                    SHEETS_URL, SHEETS_CREDS
+                    SHEETS_URL
                 )
             except Exception as e:
                 write_log("Failed to read Google Sheets: " + repr(e))
