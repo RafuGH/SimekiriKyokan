@@ -727,16 +727,53 @@ class TaskManagerWindow(QWidget):
         self.load_tasks()
 
     def run_task(self, task_name):
-        import win32com.client
-        try:
-            service = win32com.client.Dispatch("Schedule.Service")
-            service.Connect()
-            root = service.GetFolder("\\")
-            task = root.GetTask(task_name)
-            task.Run()
-            QMessageBox.information(self, "実行完了", f"{task_name} を実行しました")
-        except Exception as e:
-            QMessageBox.warning(self, "実行失敗", f"実行に失敗しました:\n{e}")
+        """
+        タスクスケジューラ経由ではなく、config を直接読んで
+        simekiri_notify.run_notify() を呼び出す。
+        スケジュール期間外でも即時実行できる。
+        """
+        deadline_id = task_name.replace(TASK_BASE_NAME + "_", "")
+        config_path = get_task_config_path(deadline_id)
+
+        if not os.path.exists(config_path):
+            QMessageBox.warning(self, "実行失敗", "設定ファイルが見つかりません")
+            return
+
+        # 別スレッドで実行してGUIをブロックしない
+        import threading
+
+        def _run():
+            try:
+                result = simekiri_notify.run_notify(config_path, test_mode=False)
+                # GUIスレッドへの通知はシグナルが理想だが、
+                # シンプルにメッセージボックスをメインスレッドから呼ぶ
+                from PyQt6.QtCore import QMetaObject, Qt as QtCore_Qt
+                if result == 0:
+                    QMetaObject.invokeMethod(
+                        self, "_show_run_success",
+                        QtCore_Qt.ConnectionType.QueuedConnection
+                    )
+                else:
+                    QMetaObject.invokeMethod(
+                        self, "_show_run_error",
+                        QtCore_Qt.ConnectionType.QueuedConnection
+                    )
+            except Exception as e:
+                print("run_task error:", e)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        QMessageBox.information(self, "実行開始", "通知を送信しています…\n完了後にメッセージが表示されます。")
+
+    from PyQt6.QtCore import pyqtSlot
+
+    @pyqtSlot()
+    def _show_run_success(self):
+        QMessageBox.information(self, "実行完了", "通知を送信しました ✅")
+
+    @pyqtSlot()
+    def _show_run_error(self):
+        QMessageBox.warning(self, "実行失敗", "通知の送信中にエラーが発生しました。\nログを確認してください。")
 
     def edit_task(self, task_name):
         deadline_id = task_name.replace(TASK_BASE_NAME+"_", "")
