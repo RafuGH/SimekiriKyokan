@@ -276,8 +276,8 @@ class NotifierApp(QWidget):
         layout.addWidget(QLabel("──────── 通知先 ────────"))
 
         webhook_label = QLabel(
-            "Discord / Slack / Teams の Webhook URL\n"
-            "（URLから自動判定します）"
+            "Webhook URL（Discord / Slack / Teams / Chatwork / Google Chat）\n"
+            "自動判定されます。画像送信：Discord/Teams/Google Chat 対応"
         )
         webhook_label.setWordWrap(True)
         layout.addWidget(webhook_label)
@@ -313,7 +313,7 @@ class NotifierApp(QWidget):
 
         reviewer_webhook_label = QLabel(
             "レビュアー通知先 Webhook URL\n"
-            "（空欄の場合は上の Webhook URL を使用）"
+            "（同じプラットフォーム対応。空欄で上の URL を使用）"
         )
         reviewer_webhook_label.setWordWrap(True)
         reviewer_vl.addWidget(reviewer_webhook_label)
@@ -879,7 +879,10 @@ class TaskEditDialog(QDialog):
 
         # ---- Webhook ----
         layout.addWidget(QLabel("──────── 通知先 ────────"))
-        layout.addWidget(QLabel("Discord / Slack / Teams の Webhook URL"))
+        layout.addWidget(QLabel(
+            "Webhook URL（Discord / Slack / Teams / Chatwork / Google Chat）\n"
+            "画像送信対応：Discord・Teams・Google Chat"
+        ))
         self.webhook_input = QLineEdit(cfg.get("webhook_url", ""))
         layout.addWidget(self.webhook_input)
 
@@ -922,7 +925,10 @@ class TaskEditDialog(QDialog):
         self.reviewer_group = QWidget()
         reviewer_vl = QVBoxLayout(self.reviewer_group)
         reviewer_vl.setContentsMargins(20, 0, 0, 0)
-        reviewer_vl.addWidget(QLabel("レビュアー通知先 Webhook URL（省略可）"))
+        reviewer_vl.addWidget(QLabel(
+            "レビュアー通知先 Webhook URL（省略可）\n"
+            "Discord/Slack/Teams/Chatwork/Google Chat 対応"
+        ))
         self.reviewer_webhook_input = QLineEdit(cfg.get("reviewer_webhook_url", ""))
         reviewer_vl.addWidget(self.reviewer_webhook_input)
         reviewer_vl.addWidget(QLabel("レビュアーのメンション設定（担当名 → レビュアーID）"))
