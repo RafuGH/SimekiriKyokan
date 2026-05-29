@@ -229,18 +229,30 @@ def run_notify(config_path=None, test_mode=False):
     # ---- 確認待ち通知先（レビュアー）設定 ----
     REVIEWER_ENABLED = config.get("reviewer_enabled", False)
     REVIEWER_WEBHOOK = config.get("reviewer_webhook_url", "") or WEBHOOK_URL
+    _reviewer_webhook_kind = detect_webhook_type(REVIEWER_WEBHOOK)
     REVIEWER_MENTION_MAP = config.get("reviewer_mentions", {})
     # list → dict 変換（レビュアー）
+    # reviewer_mentions は [{"name": "...", "id": "..."}] 形式で保存されている
+    # IDからプラットフォーム別のメンション文字列を生成する
     if isinstance(REVIEWER_MENTION_MAP, list):
         fixed = {}
         for item in REVIEWER_MENTION_MAP:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name", "")).strip()
+            name    = str(item.get("name", "")).strip()
             user_id = str(item.get("id", "")).strip()
-            if name and user_id:
-                fixed[name] = f"<@{user_id}>" if detect_webhook_type(REVIEWER_WEBHOOK) == "discord" else f"<@{user_id}>"
+            if not user_id:
+                continue
+            if _reviewer_webhook_kind == "slack":
+                mention_str = f"<@{user_id}>"        # Slack: <@UXXXXXXXX>
+            elif _reviewer_webhook_kind == "teams":
+                mention_str = f"<at>{name}</at>"      # Teams: <at>表示名</at>
+            else:
+                mention_str = f"<@{user_id}>"         # Discord: <@数字ID>
+            key = name if name else user_id
+            fixed[key] = mention_str
         REVIEWER_MENTION_MAP = fixed
+    write_log(f"REVIEWER_MENTION_MAP={REVIEWER_MENTION_MAP}")
 
     # list → dict 変換（通常メンション）
     if isinstance(MENTION_MAP, list):
@@ -682,15 +694,18 @@ def run_notify(config_path=None, test_mode=False):
         if REVIEWER_ENABLED and not review_pending.empty:
             write_log(f"確認待ちタスク {len(review_pending)} 件をレビュアーに通知します")
 
+            # レビュアーメンションを全員分まとめる
+            # REVIEWER_MENTION_MAP = {"担当名": "<@ID>"} だが、
+            # 確認待ち通知は「レビュアー全員」に飛ばすため全IDを結合する
+            all_reviewer_mentions = ""
+            if isinstance(REVIEWER_MENTION_MAP, dict) and REVIEWER_MENTION_MAP:
+                all_reviewer_mentions = " ".join(REVIEWER_MENTION_MAP.values())
+            write_log(f"reviewer mentions: {all_reviewer_mentions!r}")
+
             reviewer_embeds = []
 
             for 担当表示, group in review_pending.groupby("担当"):
                 namekey = str(担当表示).strip() if 担当表示 is not None else "未設定"
-
-                # レビュアーメンション取得
-                reviewer_mention = ""
-                if isinstance(REVIEWER_MENTION_MAP, dict):
-                    reviewer_mention = REVIEWER_MENTION_MAP.get(namekey, "")
 
                 lines = []
                 for _, row in group.iterrows():
@@ -718,7 +733,7 @@ def run_notify(config_path=None, test_mode=False):
                     img_buf = make_task_image(namekey, group, person_rates.get(namekey, 0))
                     r_img = send_webhook_image(
                         REVIEWER_WEBHOOK,
-                        f"🔍 {reviewer_mention} {namekey} の確認待ち作業リスト",
+                        f"🔍 {namekey} の確認待ち作業リスト",
                         img_buf
                     )
                     write_log(f"Posted reviewer image for {namekey}, status={getattr(r_img,'status_code','N/A')}")
@@ -727,10 +742,12 @@ def run_notify(config_path=None, test_mode=False):
 
             reviewer_embeds = reviewer_embeds[:10]
 
+            # サマリー送信（メンションはここに集約）
+            mention_prefix = f"{all_reviewer_mentions}\n" if all_reviewer_mentions else ""
             try:
                 r_rev = send_webhook_text(
                     REVIEWER_WEBHOOK,
-                    f"🔍 **確認待ちタスクのお知らせ**\n以下のタスクが確認待ち状態です。ご確認をお願いします。",
+                    f"{mention_prefix}🔍 **確認待ちタスクのお知らせ**\n以下のタスクが確認待ち状態です。ご確認をお願いします。",
                     reviewer_embeds
                 )
                 write_log(f"Posted reviewer summary status={getattr(r_rev,'status_code','N/A')}")
