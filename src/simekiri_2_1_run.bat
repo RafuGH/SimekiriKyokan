@@ -1,4 +1,4 @@
 @echo off
-cd C:\Users\2250353\Documents\GitHub\SimekiriKyokan\src
+cd /d %~dp0
 python simekiri_gui.py
 pause

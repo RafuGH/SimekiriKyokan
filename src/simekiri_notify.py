@@ -1,22 +1,21 @@
 #simekiri_notify.py
+#
+# 締切通知のオーケストレーション（データ読み込み → 集計 → Webhook送信）
 
 import os
 import sys
 import json
 import traceback
-from datetime import datetime, timedelta
-import base64
+from datetime import datetime
 
 import pandas as pd
-import requests
-from PIL import Image, ImageDraw, ImageFont
-from io import BytesIO
-import textwrap
 
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
+from webhook_client import detect_webhook_type, build_mention, send_webhook_text, send_webhook_image
+from task_image import make_task_image, STYLE_MAP
+from data_loader import convert_deadline_value, load_dataframe_from_excel, load_dataframe_from_sheets
 
 LOG_FILE = None
+
 
 def write_log(message):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -31,307 +30,39 @@ def write_log(message):
     print(f"[{now}] {message}")
 
 
-# ===================================================
-# Webhook送信ヘルパー（Discord / Slack / Teams 自動判定）
-# ===================================================
-
-def detect_webhook_type(url: str) -> str:
-    """URLからWebhookの種類を判定して返す。"""
-    if not url:
-        return "discord"
-    if "hooks.slack.com" in url:
-        return "slack"
-    if "outlook.office.com" in url or "office365.com" in url or "webhook.office.com" in url:
-        return "teams"
-    if "chatwork.com" in url:
-        return "chatwork"
-    if "chat.googleapis.com" in url:
-        return "googlechat"
-    return "discord"
-
-
-def build_mention(name: str, user_id: str, webhook_kind: str) -> str:
+def _mentions_list_to_dict(mention_list, webhook_kind):
     """
-    プラットフォーム別のメンション文字列を生成する。
-    name    : 表示名（Teams / Chatwork で使用）
-    user_id : ユーザーID / ユーザー名（Discord / Slack で使用）
-    webhook_kind: detect_webhook_type() の戻り値
-
-    各プラットフォームのメンション形式:
-        Discord    : <@数字ID> または <@ユーザー名>
-        Slack      : <@UXXXXXXXX>
-        Teams      : <at>表示名</at>
-        Chatwork   : [To:数字ID] 表示名
-        Google Chat: @表示名のみ（メンション非対応）
+    [{"name": "...", "id": "..."}] 形式のメンション設定を
+    {"担当名": "<@ID>"} 形式（プラットフォーム別文字列）に変換する。
     """
-    if not user_id and not name:
-        return ""
-    if webhook_kind == "slack":
-        return f"<@{user_id}>"
-    elif webhook_kind == "teams":
-        return f"<at>{name}</at>"
-    elif webhook_kind == "chatwork":
-        return f"[To:{user_id}] {name}"
-    elif webhook_kind == "googlechat":
-        return f"@{name}" if name else f"@{user_id}"
-    else:
-        # Discord: ユーザーIDが数字なら数字ID形式、そうでなければユーザー名形式
-        if user_id.isdigit():
-            return f"<@{user_id}>"
-        else:
-            return f"<@{user_id}>"  # ユーザー名でもメンション可能"
+    fixed = {}
+    for item in mention_list:
+        if not isinstance(item, dict):
+            continue
+        name    = str(item.get("name", "")).strip()
+        user_id = str(item.get("id", "")).strip()
+        if not (name or user_id):
+            continue
+        key = name if name else user_id
+        fixed[key] = build_mention(name, user_id, webhook_kind)
+    return fixed
 
 
-def send_webhook_text(url: str, content: str, embeds: list = None) -> requests.Response:
-    """
-    プラットフォームを自動判定してテキスト＋embed（任意）を送信する。
-    対応: Discord / Slack / Teams / Chatwork / Google Chat
-    """
-    kind = detect_webhook_type(url)
-
-    if kind == "slack":
-        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": content}}]
-        if embeds:
-            for emb in embeds:
-                title       = emb.get("title", "")
-                desc        = emb.get("description", "")
-                footer_text = emb.get("footer", {}).get("text", "")
-                block_text  = f"*{title}*\n{desc}"
-                if footer_text:
-                    block_text += f"\n_{footer_text}_"
-                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": block_text}})
-                blocks.append({"type": "divider"})
-        return requests.post(url, json={"blocks": blocks})
-
-    elif kind == "teams":
-        body_items = [{"type": "TextBlock", "text": content, "wrap": True, "size": "Medium"}]
-        if embeds:
-            for emb in embeds:
-                title       = emb.get("title", "")
-                desc        = emb.get("description", "")
-                footer_text = emb.get("footer", {}).get("text", "")
-                if title:
-                    body_items.append({"type": "TextBlock", "text": title, "weight": "Bolder", "wrap": True})
-                if desc:
-                    body_items.append({"type": "TextBlock", "text": desc, "wrap": True})
-                if footer_text:
-                    body_items.append({"type": "TextBlock", "text": footer_text, "isSubtle": True, "wrap": True})
-                body_items.append({"type": "TextBlock", "text": "──────────", "isSubtle": True})
-        payload = {
-            "type": "message",
-            "attachments": [{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "type": "AdaptiveCard",
-                    "version": "1.2",
-                    "body": body_items
-                }
-            }]
-        }
-        return requests.post(url, json=payload)
-
-    elif kind == "chatwork":
-        # Chatwork Incoming Webhook: body パラメータにテキストを送る
-        # embed はテキストに展開して付加する
-        lines = [content]
-        if embeds:
-            for emb in embeds:
-                title       = emb.get("title", "")
-                desc        = emb.get("description", "")
-                footer_text = emb.get("footer", {}).get("text", "")
-                if title:
-                    lines.append(f"[title]{title}[/title]")
-                if desc:
-                    lines.append(desc)
-                if footer_text:
-                    lines.append(footer_text)
-                lines.append("──────────")
-        body_text = "\n".join(lines)
-        return requests.post(url, data={"body": body_text})
-
-    elif kind == "googlechat":
-        # Google Chat Incoming Webhook: {"text": "..."} のみ対応
-        # embed はテキストに展開して付加する
-        lines = [content]
-        if embeds:
-            for emb in embeds:
-                title       = emb.get("title", "")
-                desc        = emb.get("description", "")
-                footer_text = emb.get("footer", {}).get("text", "")
-                if title:
-                    lines.append(f"*{title}*")
-                if desc:
-                    lines.append(desc)
-                if footer_text:
-                    lines.append(f"_{footer_text}_")
-                lines.append("──────────")
-        return requests.post(url, json={"text": "\n".join(lines)})
-
-    else:
-        # Discord
-        discord_payload = {"content": content}
-        if embeds:
-            discord_payload["embeds"] = embeds
-        return requests.post(url, json=discord_payload)
-
-
-def send_webhook_image(url: str, content: str, image_buffer: BytesIO) -> requests.Response:
-    """
-    プラットフォームを自動判定して画像を送信する。
-
-    画像送信対応状況:
-        Discord    : ✅ ファイル添付
-        Slack      : ✗  Webhook では非対応（テキストのみ）
-        Teams      : ✅ Base64 → Adaptive Card に埋め込み
-        Chatwork   : ✗  Webhook では非対応（テキストのみ）
-        Google Chat: ✅ Base64 → Card に埋め込み
-    """
-    kind = detect_webhook_type(url)
-
-    if kind == "discord":
-        return requests.post(
-            url,
-            files={"file": ("task.png", image_buffer, "image/png")},
-            data={"content": content}
-        )
-
-    elif kind == "teams":
-        # Teams: Adaptive Card に Base64 画像を埋め込む
-        image_buffer.seek(0)
-        image_b64 = base64.b64encode(image_buffer.read()).decode("utf-8")
-        image_data_url = f"data:image/png;base64,{image_b64}"
-
-        body_items = [{"type": "TextBlock", "text": content, "wrap": True}]
-        body_items.append({
-            "type": "Image",
-            "url": image_data_url,
-            "size": "Stretch"
-        })
-
-        payload = {
-            "type": "message",
-            "attachments": [{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "type": "AdaptiveCard",
-                    "version": "1.2",
-                    "body": body_items
-                }
-            }]
-        }
-        return requests.post(url, json=payload)
-
-    elif kind == "googlechat":
-        # Google Chat: Card に Base64 画像を埋め込む
-        image_buffer.seek(0)
-        image_b64 = base64.b64encode(image_buffer.read()).decode("utf-8")
-        image_data_url = f"data:image/png;base64,{image_b64}"
-
-        payload = {
-            "cards": [{
-                "header": {"title": "作業リスト"},
-                "sections": [{
-                    "widgets": [
-                        {"textParagraph": {"text": content}},
-                        {"image": {"imageUrl": image_data_url}}
-                    ]
-                }]
-            }]
-        }
-        return requests.post(url, json=payload)
-
-    else:
-        # Slack, Chatwork など：テキストのみ送信
-        return send_webhook_text(url, content)
-
-
-# ===================================================
-# Google Sheets 読み込みヘルパー
-# ===================================================
-
-def load_dataframe_from_sheets(spreadsheet_url: str, sheet_name: str = "作業リスト"):
-    """
-    Google Sheets APIでスプレッドシートを読み込み DataFrameを返す。
-    トークンは google_auth_helper から自動取得（事前に GUI で認可が必要）。
-    戻り値: (df, col_width_map, row_height_base)
-    """
+def _choose_log_dir(app_dir):
     try:
-        import gspread
-        from google_auth_helper import get_creds, has_token
-    except ImportError as e:
-        raise ImportError(
-            "gspread または google-auth がインストールされていません。\n"
-            "pip install gspread google-auth google-auth-oauthlib を実行してください。\n" + str(e)
-        )
+        os.makedirs(app_dir, exist_ok=True)
+        return app_dir
+    except Exception:
+        return os.path.expanduser("~")
 
-    if not has_token():
-        raise ValueError(
-            "Google Sheets の認可がまだ完了していません。\n"
-            "GUI の「Google で認可する」ボタンをクリックして認可してください。"
-        )
-
-    try:
-        creds = get_creds()
-        if not creds:
-            raise ValueError("トークンの取得に失敗しました。もう一度認可してください。")
-        gc = gspread.authorize(creds)
-    except Exception as e:
-        raise ValueError(f"Google Sheets の認可に失敗しました:\n{str(e)}")
-
-    # URLからスプレッドシートを開く
-    sh = gc.open_by_url(spreadsheet_url)
-    ws = sh.worksheet(sheet_name)
-
-    all_values = ws.get_all_values()
-
-    if not all_values:
-        raise ValueError("スプレッドシートにデータがありません")
-
-    # C列（index=2）から K列（index=10）に相当する列を取得
-    # ヘッダー行を特定（空でない最初の行）
-    header_row_idx = 0
-    for i, row in enumerate(all_values):
-        if any(cell.strip() for cell in row[2:11]):
-            header_row_idx = i
-            break
-
-    headers = all_values[header_row_idx][2:11]
-    data_rows = [r[2:11] for r in all_values[header_row_idx + 1:] if any(c.strip() for c in r[2:11])]
-
-    df = pd.DataFrame(data_rows, columns=headers)
-
-    # デフォルト列幅マップ
-    DEFAULT_COL_WIDTH = 120
-    col_width_map = {h: DEFAULT_COL_WIDTH for h in headers}
-    for col, w in {"内容": 160, "詳細": 200, "備考": 140, "担当": 80, "締切": 70}.items():
-        if col in col_width_map:
-            col_width_map[col] = w
-
-    row_height_base = 24
-
-    return df, col_width_map, row_height_base
-
-
-# ===================================================
-# メイン処理
-# ===================================================
 
 def run_notify(config_path=None, test_mode=False):
-    def pt_to_px(pt):
-        return int(pt * 96 / 72)
-
-    if getattr(sys, 'frozen', False):
-        BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    global LOG_FILE
 
     APP_DIR = os.path.join(os.environ["LOCALAPPDATA"], "SimekiriKyokan")
-    os.makedirs(APP_DIR, exist_ok=True)
-
-    global LOG_FILE
-    LOG_FILE = os.path.join(APP_DIR, "simekiri_run_log.txt")
+    LOG_DIR = _choose_log_dir(APP_DIR)
+    LOG_FILE = os.path.join(LOG_DIR, "simekiri_run_log.txt")
+    ERR_FILE = os.path.join(LOG_DIR, "simekiri_error_log.txt")
 
     print("ARGV:", sys.argv)
     print("CONFIG_PATH:", config_path)
@@ -340,178 +71,79 @@ def run_notify(config_path=None, test_mode=False):
         print("ERROR: config_path is None")
         return 1
 
-    CONFIG_FILE = config_path
-    write_log(f"Using config file: {CONFIG_FILE}")
+    write_log(f"Using config file: {config_path}")
 
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    WEBHOOK_URL = config.get("webhook_url")
+    WEBHOOK_URL = config.get("webhook_url", "")
     if not WEBHOOK_URL:
         write_log("Webhook URL is missing")
         return 1
 
-    DAYS_BEFORE = config.get("days_before_deadline", 3)
-    MENTION_ENABLED = config.get("mention_enabled", False)
-    MENTION_MAP = config.get("mentions", {})
+    DAYS_BEFORE_DEADLINE = config.get("days_before_deadline", 3)
+    MENTION_ENABLED      = config.get("mention_enabled", False)
+    MENTION_MAP          = config.get("mentions", {})
 
     # ---- 確認待ち通知先（レビュアー）設定 ----
-    REVIEWER_ENABLED = config.get("reviewer_enabled", False)
-    REVIEWER_WEBHOOK = config.get("reviewer_webhook_url", "") or WEBHOOK_URL
-    _reviewer_webhook_kind = detect_webhook_type(REVIEWER_WEBHOOK)
+    REVIEWER_ENABLED     = config.get("reviewer_enabled", False)
+    REVIEWER_WEBHOOK     = config.get("reviewer_webhook_url", "") or WEBHOOK_URL
     REVIEWER_MENTION_MAP = config.get("reviewer_mentions", {})
-    # list → dict 変換（レビュアー）
-    # reviewer_mentions は [{"name": "...", "id": "..."}] 形式で保存されている
-    # IDからプラットフォーム別のメンション文字列を生成する
+
+    _reviewer_webhook_kind = detect_webhook_type(REVIEWER_WEBHOOK)
     if isinstance(REVIEWER_MENTION_MAP, list):
-        fixed = {}
-        for item in REVIEWER_MENTION_MAP:
-            if not isinstance(item, dict):
-                continue
-            name    = str(item.get("name", "")).strip()
-            user_id = str(item.get("id", "")).strip()
-            if not user_id:
-                continue
-            mention_str = build_mention(name, user_id, _reviewer_webhook_kind)
-            key = name if name else user_id
-            fixed[key] = mention_str
-        REVIEWER_MENTION_MAP = fixed
+        REVIEWER_MENTION_MAP = _mentions_list_to_dict(REVIEWER_MENTION_MAP, _reviewer_webhook_kind)
     write_log(f"REVIEWER_MENTION_MAP={REVIEWER_MENTION_MAP}")
 
-    # list → dict 変換（通常メンション）
     _main_webhook_kind = detect_webhook_type(WEBHOOK_URL)
     if isinstance(MENTION_MAP, list):
         write_log("mentions is list → converting to dict")
-        fixed = {}
-        for item in MENTION_MAP:
-            if not isinstance(item, dict):
-                continue
-            name    = str(item.get("name", "")).strip()
-            user_id = str(item.get("id", "")).strip()
-            if name or user_id:
-                fixed[name if name else user_id] = build_mention(name, user_id, _main_webhook_kind)
-        MENTION_MAP = fixed
+        MENTION_MAP = _mentions_list_to_dict(MENTION_MAP, _main_webhook_kind)
 
     write_log(f"MENTION_ENABLED={MENTION_ENABLED}")
     write_log(f"MENTION_MAP={MENTION_MAP}")
     write_log(f"REVIEWER_ENABLED={REVIEWER_ENABLED}")
 
-    IS_TEST = test_mode
-
-    if IS_TEST:
+    if test_mode:
         write_log("=== TEST MODE ===")
         try:
             r = send_webhook_text(WEBHOOK_URL, "🧪 **締切教官 通知テスト**\nこのメッセージが見えていれば正常です。")
             status = getattr(r, "status_code", None)
             write_log(f"Test notify sent. status={status}")
-            if status in (200, 204):
-                return 0
-            else:
-                return 1
+            return 0 if status in (200, 204) else 1
         except Exception as e:
             write_log("Test notify failed: " + repr(e))
             return 1
 
-    def _choose_log_dir():
-        try:
-            os.makedirs(APP_DIR, exist_ok=True)
-            return APP_DIR
-        except Exception:
-            return os.path.expanduser("~")
-
-    LOG_DIR = _choose_log_dir()
-    LOG_FILE = os.path.join(LOG_DIR, "simekiri_run_log.txt")
-    ERR_FILE = os.path.join(LOG_DIR, "simekiri_error_log.txt")
-
     write_log("=== start run pid=" + str(os.getpid()) + " cwd=" + os.getcwd() + " ===")
 
     try:
-        APP_DIR = os.path.join(os.environ["LOCALAPPDATA"], "SimekiriKyokan")
-        os.makedirs(APP_DIR, exist_ok=True)
-
-        EXCEL_FILE    = config.get("excel_path", "")
-        SHEETS_URL    = config.get("sheets_url", "")
-        DATA_SOURCE   = config.get("data_source", "excel")  # "excel" or "sheets"
-
-        WEBHOOK_URL           = config.get("webhook_url", "")
-        DAYS_BEFORE_DEADLINE  = config.get("days_before_deadline", 3)
-        MENTION_ENABLED       = config.get("mention_enabled", False)
-
-        # -------------------------
-        # Helpers: date conversions
-        # -------------------------
-        def convert_deadline_value(x):
-            if pd.isna(x):
-                return pd.NaT
-            if isinstance(x, (int, float)):
-                try:
-                    return (pd.to_datetime("1899-12-30") + pd.to_timedelta(x, unit="D"))
-                except Exception:
-                    return pd.to_datetime(x, errors="coerce")
-            try:
-                return pd.to_datetime(x, errors="coerce")
-            except Exception:
-                return pd.NaT
+        EXCEL_FILE  = config.get("excel_path", "")
+        SHEETS_URL  = config.get("sheets_url", "")
+        DATA_SOURCE = config.get("data_source", "excel")  # "excel" or "sheets"
 
         # -------------------------
         # データ読み込み（Excel or Google Sheets）
         # -------------------------
-        COL_WIDTH_MAP = {}
-        row_height_base = pt_to_px(15)
-
         if DATA_SOURCE == "sheets":
-            # ---------- Google Sheets ----------
             if not SHEETS_URL:
                 write_log("sheets_url is missing")
                 return 1
 
             write_log(f"Google Sheets から読み込み中: {SHEETS_URL}")
             try:
-                df, COL_WIDTH_MAP, row_height_base = load_dataframe_from_sheets(
-                    SHEETS_URL
-                )
+                df, COL_WIDTH_MAP, row_height_base = load_dataframe_from_sheets(SHEETS_URL)
             except Exception as e:
                 write_log("Failed to read Google Sheets: " + repr(e))
                 raise
 
         else:
-            # ---------- Excel ----------
             if not EXCEL_FILE or not os.path.exists(EXCEL_FILE):
                 write_log(f"Excel NOT FOUND: {EXCEL_FILE}")
                 return 1
 
             try:
-                df = pd.read_excel(
-                    EXCEL_FILE,
-                    sheet_name="作業リスト",
-                    usecols="C:K"
-                )
-
-                wb = load_workbook(EXCEL_FILE)
-                ws = wb["作業リスト"]
-
-                excel_width_map = {}
-                start_col_index = 3
-
-                for i, col_name in enumerate(df.columns):
-                    excel_col_index = start_col_index + i
-                    letter = get_column_letter(excel_col_index)
-                    dim = ws.column_dimensions.get(letter)
-                    if dim and dim.width:
-                        pixel_width = int(dim.width * 8.2 + 12)
-                        excel_width_map[col_name] = pixel_width
-                    else:
-                        excel_width_map[col_name] = 120
-
-                COL_WIDTH_MAP = excel_width_map
-
-                data_row_index = 8
-                excel_row_height = ws.row_dimensions[data_row_index].height
-                if excel_row_height:
-                    row_height_base = int(excel_row_height * 96 / 72) + 3
-                else:
-                    row_height_base = pt_to_px(15)
-
+                df, COL_WIDTH_MAP, row_height_base = load_dataframe_from_excel(EXCEL_FILE)
             except Exception as e:
                 write_log("Failed to read excel: " + repr(e))
                 raise
@@ -546,7 +178,6 @@ def run_notify(config_path=None, test_mode=False):
             df["締切"] = pd.to_datetime(df["締切"], errors="coerce")
 
         today = datetime.now().date()
-        today_str = today.strftime("%Y%m%d")
 
         total_tasks = len(df)
         completed_tasks = int(df["進捗"].sum()) if "進捗" in df else 0
@@ -589,142 +220,6 @@ def run_notify(config_path=None, test_mode=False):
                 write_log("Webhook send failed (no pending): " + repr(e))
             return 0
 
-        STYLE_MAP = {
-            "デザイナー": {"color": 0xFFD700},
-            "プログラマー": {"color": 0x1E90FF},
-            "サウンド": {"color": 0xFFA500},
-            "未設定": {"color": 0x808080},
-        }
-
-        WRAP_RULES = {
-            "職種": 8, "分類": 10, "内容": 14, "詳細": 34,
-            "担当": 4, "進捗": 4, "優先度": 4, "備考": 10, "締切": 6,
-        }
-
-        def make_task_image(name, tasks, rate):
-            DISPLAY_COLUMNS = [c for c in COLUMN_ORDER if c in COL_WIDTH_MAP]
-            headers = DISPLAY_COLUMNS
-
-            font_path = os.path.join(os.environ["WINDIR"], "Fonts", "meiryo.ttc")
-
-            try:
-                title_font  = ImageFont.truetype(font_path, pt_to_px(16))
-                header_font = ImageFont.truetype(font_path, pt_to_px(11))
-                text_font   = ImageFont.truetype(font_path, pt_to_px(11))
-            except Exception:
-                title_font  = ImageFont.load_default()
-                header_font = ImageFont.load_default()
-                text_font   = ImageFont.load_default()
-
-            TOP_PADDING = 6
-            LEFT_PADDING = 10
-            LEFT_ALIGN_COLUMNS = ["詳細", "備考"]
-            line_height = 20
-            MAX_HEIGHT = 5000
-
-            STATUS_COLOR_MAP = {
-                "完了":     (180, 210, 255),
-                "確認待ち": (180, 240, 200),
-                "進行中":   (255, 245, 170),
-                "未着手":   (245, 245, 245),
-            }
-
-            col_widths = [COL_WIDTH_MAP[h] for h in headers]
-
-            def wrap_text_pixel(text, max_width):
-                if not text:
-                    return [""]
-                dummy_img = Image.new("RGB", (1, 1))
-                draw_dummy = ImageDraw.Draw(dummy_img)
-                lines = []
-                for raw_line in str(text).splitlines():
-                    current = ""
-                    for char in raw_line:
-                        if draw_dummy.textlength(current + char, font=text_font) <= max_width - 12:
-                            current += char
-                        else:
-                            lines.append(current)
-                            current = char
-                    lines.append(current)
-                return lines
-
-            wrapped_rows = []
-            for _, row in tasks.iterrows():
-                dl = row["締切"]
-                try:
-                    deadline_date = dl.date() if hasattr(dl, "date") else pd.to_datetime(dl).date()
-                except Exception:
-                    deadline_date = datetime.now().date()
-                deadline_text = deadline_date.strftime("%m/%d")
-
-                values = []
-                for h in headers:
-                    if h == "締切":
-                        values.append(deadline_text)
-                    elif h == "進捗":
-                        status = str(row.get("進捗_raw", "")).strip()
-                        status_icon_map = {"完了": "完了", "確認待ち": "確認待ち", "進行中": "進行中", "未着手": "未着手"}
-                        values.append(status_icon_map.get(status, status))
-                    else:
-                        values.append(row.get(h, ""))
-
-                wrapped = [wrap_text_pixel(val, col_widths[i]) for i, val in enumerate(values)]
-                max_lines = max(len(cell) for cell in wrapped)
-                status_raw = str(row.get("進捗_raw", "")).strip()
-                wrapped_rows.append((wrapped, max_lines, status_raw))
-
-            header_height = 140
-            total_height = header_height + sum((max_lines * line_height + TOP_PADDING*2) for _, max_lines, _ in wrapped_rows) + 40 + 80
-            total_height = min(total_height, MAX_HEIGHT)
-            total_width  = sum(col_widths) + 40
-
-            img  = Image.new("RGB", (total_width, total_height), "white")
-            draw = ImageDraw.Draw(img)
-
-            title = f"{name} の作業（完了率 {rate}%）"
-            try:
-                title_w = draw.textbbox((0,0), title, font=title_font)[2]
-            except Exception:
-                title_w = draw.textlength(title, font=title_font)
-            draw.text(((total_width - title_w)/2, 20), title, fill="black", font=title_font)
-
-            y = 90
-            x_start = 20
-            x = x_start
-            for i, header in enumerate(headers):
-                draw.rectangle([x, y, x + col_widths[i], y + 45], fill=(230,230,230), outline="black", width=1)
-                text_w = draw.textlength(header, font=header_font)
-                draw.text((x + (col_widths[i]-text_w)/2, y+10), header, fill="black", font=header_font)
-                x += col_widths[i]
-            y += 45
-
-            for wrapped, max_lines, status_raw in wrapped_rows:
-                row_height = max_lines * line_height + TOP_PADDING*2
-                x = x_start
-                bg_color = STATUS_COLOR_MAP.get(status_raw, (255,255,255))
-                for col_index, (col_name, cell_lines) in enumerate(zip(headers, wrapped)):
-                    w = col_widths[col_index]
-                    draw.rectangle([x, y, x + w, y + row_height], fill=bg_color, outline="black", width=1)
-                    total_cell_height = len(cell_lines)*line_height
-                    if col_name in LEFT_ALIGN_COLUMNS:
-                        start_y = y + TOP_PADDING
-                    else:
-                        start_y = y + (row_height - total_cell_height)/2
-                    for i, line in enumerate(cell_lines):
-                        line_y = start_y + i*line_height
-                        if col_name in LEFT_ALIGN_COLUMNS:
-                            draw.text((x + LEFT_PADDING, line_y), line, font=text_font, fill="black")
-                        else:
-                            line_w = draw.textlength(line, font=text_font)
-                            draw.text((x + (w - line_w)/2, line_y), line, font=text_font, fill="black")
-                    x += w
-                y += row_height
-
-            buffer = BytesIO()
-            img.save(buffer, format="PNG")
-            buffer.seek(0)
-            return buffer
-
         # -------------------------
         # 通常の締切通知（担当者ごと）
         # -------------------------
@@ -740,7 +235,7 @@ def run_notify(config_path=None, test_mode=False):
                 mention = MENTION_MAP.get(namekey, "")
 
             try:
-                image_buffer = make_task_image(namekey, group, rate)
+                image_buffer = make_task_image(namekey, group, rate, COLUMN_ORDER, COL_WIDTH_MAP)
                 r = send_webhook_image(
                     WEBHOOK_URL,
                     f"📗 {mention} {namekey} の作業リスト",
@@ -778,13 +273,12 @@ def run_notify(config_path=None, test_mode=False):
             if len(description_text) > 4000:
                 description_text = description_text[:3900] + "\n…（以下省略）"
 
-            embed = {
+            all_embeds.append({
                 "title": f"📋 {namekey}の作業一覧（完了率 {rate}%）",
                 "description": description_text,
                 "color": embed_color,
                 "footer": {"text": f"更新日: {today.strftime('%Y/%m/%d')}"}
-            }
-            all_embeds.append(embed)
+            })
 
         all_embeds = all_embeds[:10]
 
@@ -815,9 +309,7 @@ def run_notify(config_path=None, test_mode=False):
         if REVIEWER_ENABLED and not review_pending.empty:
             write_log(f"確認待ちタスク {len(review_pending)} 件をレビュアーに通知します")
 
-            # レビュアーメンションを全員分まとめる
-            # REVIEWER_MENTION_MAP = {"担当名": "<@ID>"} だが、
-            # 確認待ち通知は「レビュアー全員」に飛ばすため全IDを結合する
+            # レビュアーメンションを全員分まとめる（確認待ち通知は「レビュアー全員」に飛ばす）
             all_reviewer_mentions = ""
             if isinstance(REVIEWER_MENTION_MAP, dict) and REVIEWER_MENTION_MAP:
                 all_reviewer_mentions = " ".join(REVIEWER_MENTION_MAP.values())
@@ -841,17 +333,16 @@ def run_notify(config_path=None, test_mode=False):
                 if len(description_text) > 4000:
                     description_text = description_text[:3900] + "\n…（以下省略）"
 
-                reviewer_embed = {
+                reviewer_embeds.append({
                     "title": f"🔍 確認待ちタスク（担当: {namekey}）",
                     "description": description_text,
                     "color": 0x2ECC71,
                     "footer": {"text": f"更新日: {today.strftime('%Y/%m/%d')}"}
-                }
-                reviewer_embeds.append(reviewer_embed)
+                })
 
                 # 画像送信（担当者ごと）
                 try:
-                    img_buf = make_task_image(namekey, group, person_rates.get(namekey, 0))
+                    img_buf = make_task_image(namekey, group, person_rates.get(namekey, 0), COLUMN_ORDER, COL_WIDTH_MAP)
                     r_img = send_webhook_image(
                         REVIEWER_WEBHOOK,
                         f"🔍 {namekey} の確認待ち作業リスト",
@@ -863,7 +354,6 @@ def run_notify(config_path=None, test_mode=False):
 
             reviewer_embeds = reviewer_embeds[:10]
 
-            # サマリー送信（メンションはここに集約）
             mention_prefix = f"{all_reviewer_mentions}\n" if all_reviewer_mentions else ""
             try:
                 r_rev = send_webhook_text(
