@@ -10,12 +10,16 @@ class RowInput(QWidget):
         super().__init__()
         self.parent_layout = parent_layout
         layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(6)
         self.short = QLineEdit()
         self.short.setPlaceholderText(short_ph)
         self.long = QLineEdit()
         self.long.setPlaceholderText(long_ph)
         self.add_btn = QPushButton("＋")
+        self.add_btn.setFixedWidth(34)
         self.del_btn = QPushButton("－")
+        self.del_btn.setFixedWidth(34)
         self.add_btn.clicked.connect(self.add)
         self.del_btn.clicked.connect(self.delete)
         if not deletable:
@@ -27,7 +31,7 @@ class RowInput(QWidget):
         self.del_btn.setEnabled(self.parent_layout.count() > 1)
 
     def add(self):
-        row = RowInput("担当名", "ユーザーID", self.parent_layout)
+        row = RowInput(self.short.placeholderText(), self.long.placeholderText(), self.parent_layout)
         self.parent_layout.addWidget(row)
         self.update_all()
 

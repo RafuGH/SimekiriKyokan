@@ -3,213 +3,218 @@
 # 既存タスクの設定編集ダイアログ
 
 import json
-import threading
 
 from PyQt6.QtCore import QTime, QDate, Qt
+from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import (
     QDialog, QScrollArea, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QComboBox, QCheckBox, QSpinBox, QTimeEdit, QDateEdit,
-    QPushButton, QFileDialog, QMessageBox,
+    QPushButton, QFileDialog, QMessageBox, QFrame,
 )
 
 import google_auth_helper
+from theme import make_stylesheet
+from help_widgets import field_row, section_header
+from google_auth_mixin import GoogleAuthMixin
 from task_scheduler import get_config_path
 from widgets import RowInput
 
 
-class TaskEditDialog(QDialog):
+class TaskEditDialog(GoogleAuthMixin, QDialog):
     def __init__(self, cfg, parent=None):
         super().__init__(parent)
         self.cfg = cfg
-        self.setWindowTitle(f"タスク設定編集: {cfg.get('title','')}")
-        self.resize(540, 640)
+        self.setWindowTitle(f"編集 – {cfg.get('title','')}")
+        self.resize(560, 720)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
+        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.setStyleSheet(make_stylesheet(dark))
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
         inner = QWidget()
         layout = QVBoxLayout(inner)
-        scroll_area.setWidget(inner)
-
+        layout.setContentsMargins(20, 16, 20, 24)
+        layout.setSpacing(2)
+        scroll.setWidget(inner)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll_area)
+        outer.addWidget(scroll)
 
         # ---- データソース ----
-        layout.addWidget(QLabel("──────── データソース ────────"))
+        layout.addWidget(section_header("データソース"))
+        layout.addLayout(field_row("読み込み元", "datasource"))
         self.source_combo = QComboBox()
         self.source_combo.addItems(["Excel ファイル", "Google スプレッドシート"])
-        current_source = cfg.get("data_source", "excel")
-        self.source_combo.setCurrentIndex(1 if current_source == "sheets" else 0)
+        self.source_combo.setCurrentIndex(1 if cfg.get("data_source") == "sheets" else 0)
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         layout.addWidget(self.source_combo)
 
         # Excel 欄
         self.excel_group = QWidget()
-        excel_vl = QVBoxLayout(self.excel_group)
-        excel_vl.setContentsMargins(0, 0, 0, 0)
-        excel_vl.addWidget(QLabel("Excelファイル"))
-        excel_hl = QHBoxLayout()
+        evl = QVBoxLayout(self.excel_group)
+        evl.setContentsMargins(0, 4, 0, 0)
+        evl.setSpacing(4)
+        evl.addLayout(field_row("Excel ファイルのパス"))
+        ehl = QHBoxLayout(); ehl.setSpacing(6)
         self.excel_input = QLineEdit(cfg.get("excel_path", ""))
         browse_btn = QPushButton("参照")
+        browse_btn.setFixedWidth(64)
         browse_btn.clicked.connect(self.browse_excel)
-        excel_hl.addWidget(self.excel_input)
-        excel_hl.addWidget(browse_btn)
-        excel_vl.addLayout(excel_hl)
+        ehl.addWidget(self.excel_input)
+        ehl.addWidget(browse_btn)
+        evl.addLayout(ehl)
         layout.addWidget(self.excel_group)
 
         # Sheets 欄
         self.sheets_group = QWidget()
-        sheets_vl = QVBoxLayout(self.sheets_group)
-        sheets_vl.setContentsMargins(0, 0, 0, 0)
-        sheets_vl.addWidget(QLabel("スプレッドシート URL"))
+        svl = QVBoxLayout(self.sheets_group)
+        svl.setContentsMargins(0, 4, 0, 0)
+        svl.setSpacing(4)
+        svl.addLayout(field_row("スプレッドシート URL", "google_auth"))
         self.sheets_url_input = QLineEdit(cfg.get("sheets_url", ""))
-        sheets_vl.addWidget(self.sheets_url_input)
+        svl.addWidget(self.sheets_url_input)
 
         # credentials.json 配置ボタン＋状態表示
-        cred_hl = QHBoxLayout()
+        cred_hl = QHBoxLayout(); cred_hl.setSpacing(10)
         self.cred_btn = QPushButton("📄 credentials.json を配置")
         self.cred_btn.clicked.connect(self._choose_credentials_file)
         self.cred_status_label = QLabel()
         cred_hl.addWidget(self.cred_btn)
         cred_hl.addWidget(self.cred_status_label)
         cred_hl.addStretch()
-        sheets_vl.addLayout(cred_hl)
+        svl.addLayout(cred_hl)
 
         # Google 認可ボタン＋状態表示
-        auth_hl = QHBoxLayout()
-        self.auth_btn = QPushButton("🔐 Google で認可する")
+        auth_hl = QHBoxLayout(); auth_hl.setSpacing(10)
+        self.auth_btn = QPushButton("🔐  Google で認可する")
+        self.auth_btn.setObjectName("btn_primary")
         self.auth_btn.clicked.connect(self._authorize_google)
         self.auth_status_label = QLabel()
         auth_hl.addWidget(self.auth_btn)
         auth_hl.addWidget(self.auth_status_label)
         auth_hl.addStretch()
-        sheets_vl.addLayout(auth_hl)
+        svl.addLayout(auth_hl)
 
         layout.addWidget(self.sheets_group)
+        self._init_google_auth()
         self._on_source_changed(self.source_combo.currentIndex())
         self._update_credentials_status()
-        self._update_auth_status()
+        self._refresh_auth_label()
 
         # ---- Webhook ----
-        layout.addWidget(QLabel("──────── 通知先 ────────"))
-        layout.addWidget(QLabel(
-            "Webhook URL（Discord / Slack / Teams / Chatwork / Google Chat）\n"
-            "画像送信対応：Discord・Teams・Google Chat"
-        ))
+        layout.addWidget(section_header("通知先"))
+        layout.addLayout(field_row("Webhook URL", "webhook"))
         self.webhook_input = QLineEdit(cfg.get("webhook_url", ""))
         layout.addWidget(self.webhook_input)
 
+        layout.addLayout(field_row("締切何日前に通知", "days_before"))
         self.days_spin = QSpinBox()
         self.days_spin.setRange(0, 60)
         self.days_spin.setValue(cfg.get("days_before_deadline", 3))
-        layout.addWidget(QLabel("締切何日前に通知"))
+        self.days_spin.setFixedWidth(100)
         layout.addWidget(self.days_spin)
 
         # ---- メンション ----
-        self.mention_checkbox = QCheckBox("メンションを有効（任意）")
+        layout.addLayout(field_row("担当者メンション", "mention"))
+        self.mention_checkbox = QCheckBox("メンションを有効にする")
         self.mention_checkbox.setChecked(cfg.get("mention_enabled", False))
         layout.addWidget(self.mention_checkbox)
 
         self.mention_box = QWidget()
         self.mention_layout = QVBoxLayout(self.mention_box)
-        self.mention_layout.setContentsMargins(0, 0, 0, 0)
-        mentions = cfg.get("mentions", [])
-        if mentions:
-            for m in mentions:
-                row = RowInput("担当名", "ユーザーID", self.mention_layout)
-                row.short.setText(m.get("name", ""))
-                row.long.setText(m.get("id", ""))
-                self.mention_layout.addWidget(row)
-        else:
-            self.mention_layout.addWidget(RowInput("担当名", "ユーザーID", self.mention_layout, deletable=False))
-        layout.addWidget(self.mention_box)
+        self.mention_layout.setContentsMargins(20, 0, 0, 0)
+        self.mention_layout.setSpacing(2)
+        mentions = cfg.get("mentions") or []
+        for m in (mentions or [{"name": "", "id": ""}]):
+            row = RowInput("担当名", "ユーザーID", self.mention_layout, deletable=bool(mentions))
+            row.short.setText(m.get("name", ""))
+            row.long.setText(m.get("id", ""))
+            self.mention_layout.addWidget(row)
         for i in range(self.mention_layout.count()):
             w = self.mention_layout.itemAt(i).widget()
             if isinstance(w, RowInput):
                 w.update_delete_state()
+        layout.addWidget(self.mention_box)
 
         # ---- 確認待ち通知先 ----
-        layout.addWidget(QLabel("──────── 確認待ち通知 ────────"))
-        self.reviewer_checkbox = QCheckBox("確認待ちタスクを別の人に通知する（任意）")
+        layout.addWidget(section_header("確認待ち通知"))
+        layout.addLayout(field_row("レビュアーへの通知", "reviewer"))
+        self.reviewer_checkbox = QCheckBox("確認待ちタスクを別の担当者に通知する")
         self.reviewer_checkbox.setChecked(cfg.get("reviewer_enabled", False))
         self.reviewer_checkbox.stateChanged.connect(self._on_reviewer_toggled)
         layout.addWidget(self.reviewer_checkbox)
 
         self.reviewer_group = QWidget()
-        reviewer_vl = QVBoxLayout(self.reviewer_group)
-        reviewer_vl.setContentsMargins(20, 0, 0, 0)
-        reviewer_vl.addWidget(QLabel(
-            "レビュアー通知先 Webhook URL（省略可）\n"
-            "Discord/Slack/Teams/Chatwork/Google Chat 対応"
-        ))
+        rvl = QVBoxLayout(self.reviewer_group)
+        rvl.setContentsMargins(20, 4, 0, 0)
+        rvl.setSpacing(4)
+        rvl.addLayout(field_row("レビュアー Webhook URL（省略可）"))
         self.reviewer_webhook_input = QLineEdit(cfg.get("reviewer_webhook_url", ""))
-        reviewer_vl.addWidget(self.reviewer_webhook_input)
-        reviewer_vl.addWidget(QLabel("レビュアーのメンション設定（担当名 → レビュアーID）"))
+        rvl.addWidget(self.reviewer_webhook_input)
+        rvl.addLayout(field_row("レビュアーのメンション"))
         self.reviewer_mention_layout = QVBoxLayout()
-        reviewer_mentions = cfg.get("reviewer_mentions", [])
-        if reviewer_mentions:
-            for m in reviewer_mentions:
-                row = RowInput("担当名", "レビュアーID", self.reviewer_mention_layout)
-                row.short.setText(m.get("name", ""))
-                row.long.setText(m.get("id", ""))
-                self.reviewer_mention_layout.addWidget(row)
-        else:
-            self.reviewer_mention_layout.addWidget(
-                RowInput("担当名", "レビュアーID", self.reviewer_mention_layout, deletable=False)
-            )
+        self.reviewer_mention_layout.setSpacing(2)
+        reviewer_mentions = cfg.get("reviewer_mentions") or []
+        for m in (reviewer_mentions or [{"name": "", "id": ""}]):
+            row = RowInput("担当名", "レビュアーID", self.reviewer_mention_layout, deletable=bool(reviewer_mentions))
+            row.short.setText(m.get("name", ""))
+            row.long.setText(m.get("id", ""))
+            self.reviewer_mention_layout.addWidget(row)
         reviewer_mention_box = QWidget()
         reviewer_mention_box.setLayout(self.reviewer_mention_layout)
-        reviewer_vl.addWidget(reviewer_mention_box)
+        rvl.addWidget(reviewer_mention_box)
         layout.addWidget(self.reviewer_group)
         self.reviewer_group.setVisible(cfg.get("reviewer_enabled", False))
 
         # ---- 自動通知 ----
-        layout.addWidget(QLabel("──────── 自動連絡 ────────"))
-        self.auto_checkbox = QCheckBox("自動通知を有効（任意）")
+        layout.addWidget(section_header("自動連絡"))
+        layout.addLayout(field_row("タスクスケジューラ連携", "auto_notify"))
+        self.auto_checkbox = QCheckBox("自動送信を有効にする")
         self.auto_checkbox.setChecked(cfg.get("auto_notify", False))
         layout.addWidget(self.auto_checkbox)
 
+        tl = QHBoxLayout(); tl.setSpacing(10)
+        tl.addWidget(QLabel("送信時刻"))
         self.time_edit = QTimeEdit(QTime.fromString(cfg.get("notify_time", "09:00"), "HH:mm"))
-        t_layout = QHBoxLayout()
-        t_layout.addWidget(QLabel("通知時刻"))
-        t_layout.addWidget(self.time_edit)
-        layout.addLayout(t_layout)
-
+        self.time_edit.setFixedWidth(100)
+        tl.addWidget(self.time_edit)
+        tl.addSpacing(20)
+        tl.addWidget(QLabel("頻度（日おき）"))
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(1, 30)
         self.interval_spin.setValue(cfg.get("notify_interval_days", 1))
-        i_layout = QHBoxLayout()
-        i_layout.addWidget(QLabel("通知頻度（日）"))
-        i_layout.addWidget(self.interval_spin)
-        layout.addLayout(i_layout)
+        self.interval_spin.setFixedWidth(80)
+        tl.addWidget(self.interval_spin)
+        tl.addStretch()
+        layout.addLayout(tl)
 
-        # ---- 制作期間 ----
-        layout.addWidget(QLabel("制作期間"))
-        d_layout = QHBoxLayout()
+        layout.addLayout(field_row("制作期間"))
+        dl = QHBoxLayout(); dl.setSpacing(8)
 
-        start_str = cfg.get("start_date", QDate.currentDate().toString("yyyy-MM-dd"))
-        end_str   = cfg.get("end_date",   QDate.currentDate().addYears(1).toString("yyyy-MM-dd"))
-        s_date = QDate.fromString(start_str, "yyyy-MM-dd")
-        e_date = QDate.fromString(end_str,   "yyyy-MM-dd")
-        if not s_date.isValid():
-            s_date = QDate.currentDate()
-        if not e_date.isValid():
-            e_date = QDate.currentDate().addYears(1)
+        def _parse_date(s, fallback):
+            d = QDate.fromString(s, "yyyy-MM-dd")
+            return d if d.isValid() else fallback
 
-        self.start_date_edit = QDateEdit(s_date)
+        self.start_date_edit = QDateEdit(_parse_date(cfg.get("start_date", ""), QDate.currentDate()))
         self.start_date_edit.setCalendarPopup(True)
-        self.end_date_edit   = QDateEdit(e_date)
+        self.end_date_edit = QDateEdit(_parse_date(cfg.get("end_date", ""), QDate.currentDate().addYears(1)))
         self.end_date_edit.setCalendarPopup(True)
+        dl.addWidget(QLabel("開始")); dl.addWidget(self.start_date_edit)
+        dl.addSpacing(8)
+        dl.addWidget(QLabel("終了")); dl.addWidget(self.end_date_edit)
+        dl.addStretch()
+        layout.addLayout(dl)
 
-        d_layout.addWidget(QLabel("開始日"))
-        d_layout.addWidget(self.start_date_edit)
-        d_layout.addWidget(QLabel("終了日"))
-        d_layout.addWidget(self.end_date_edit)
-        layout.addLayout(d_layout)
-
-        save_btn = QPushButton("設定を保存")
+        layout.addSpacing(16)
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(sep)
+        layout.addSpacing(10)
+        save_btn = QPushButton("変更を保存する")
+        save_btn.setObjectName("btn_primary")
         save_btn.clicked.connect(self.save)
         layout.addWidget(save_btn)
+        layout.addStretch()
 
     def _choose_credentials_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "credentials.json を選択", "", "JSON (*.json)")
@@ -227,30 +232,6 @@ class TaskEditDialog(QDialog):
             self.cred_status_label.setText("✅ 配置済み")
         else:
             self.cred_status_label.setText("❌ 未配置")
-
-    def _authorize_google(self):
-        """Google Sheets の認可フロー"""
-        def _callback(success, message):
-            if success:
-                QMessageBox.information(self, "Google Sheets 認可", message)
-                self._update_auth_status()
-            else:
-                QMessageBox.warning(self, "Google Sheets 認可", message)
-
-        t = threading.Thread(
-            target=lambda: google_auth_helper.authorize_google_sheets(_callback),
-            daemon=True
-        )
-        t.start()
-
-    def _update_auth_status(self):
-        """認可状態を表示"""
-        if google_auth_helper.has_token():
-            self.auth_status_label.setText("✅ 認可済み")
-            self.auth_btn.setEnabled(False)
-        else:
-            self.auth_status_label.setText("❌ 未認可")
-            self.auth_btn.setEnabled(True)
 
     def _on_source_changed(self, index):
         is_sheets = (index == 1)
@@ -277,28 +258,35 @@ class TaskEditDialog(QDialog):
 
     def save(self):
         is_sheets = (self.source_combo.currentIndex() == 1)
-        if is_sheets and not self.sheets_url_input.text():
-            QMessageBox.warning(self, "入力エラー", "スプレッドシート URL を入力してください")
-            return
-        if not is_sheets and not self.excel_input.text():
-            QMessageBox.warning(self, "入力エラー", "Excelファイルを指定してください")
-            return
+        if is_sheets:
+            if not self.sheets_url_input.text().strip():
+                QMessageBox.warning(self, "入力エラー", "スプレッドシート URL を入力してください")
+                return
+            if not google_auth_helper.has_token():
+                QMessageBox.warning(self, "入力エラー", "Google 認証を先に完了してください")
+                return
+        else:
+            if not self.excel_input.text().strip():
+                QMessageBox.warning(self, "入力エラー", "Excelファイルを指定してください")
+                return
 
-        self.cfg["data_source"]              = "sheets" if is_sheets else "excel"
-        self.cfg["excel_path"]               = self.excel_input.text() if not is_sheets else ""
-        self.cfg["sheets_url"]               = self.sheets_url_input.text() if is_sheets else ""
-        self.cfg["webhook_url"]              = self.webhook_input.text()
-        self.cfg["days_before_deadline"]     = self.days_spin.value()
-        self.cfg["mention_enabled"]          = self.mention_checkbox.isChecked()
-        self.cfg["mentions"]                 = self._collect_mentions(self.mention_layout)
-        self.cfg["reviewer_enabled"]         = self.reviewer_checkbox.isChecked()
-        self.cfg["reviewer_webhook_url"]     = self.reviewer_webhook_input.text()
-        self.cfg["reviewer_mentions"]        = self._collect_mentions(self.reviewer_mention_layout)
-        self.cfg["auto_notify"]              = self.auto_checkbox.isChecked()
-        self.cfg["notify_time"]              = self.time_edit.time().toString("HH:mm")
-        self.cfg["notify_interval_days"]     = self.interval_spin.value()
-        self.cfg["start_date"]               = self.start_date_edit.date().toString("yyyy-MM-dd")
-        self.cfg["end_date"]                 = self.end_date_edit.date().toString("yyyy-MM-dd")
+        self.cfg.update({
+            "data_source":          "sheets" if is_sheets else "excel",
+            "excel_path":           self.excel_input.text() if not is_sheets else "",
+            "sheets_url":           self.sheets_url_input.text() if is_sheets else "",
+            "webhook_url":          self.webhook_input.text(),
+            "days_before_deadline": self.days_spin.value(),
+            "mention_enabled":      self.mention_checkbox.isChecked(),
+            "mentions":             self._collect_mentions(self.mention_layout),
+            "reviewer_enabled":     self.reviewer_checkbox.isChecked(),
+            "reviewer_webhook_url": self.reviewer_webhook_input.text(),
+            "reviewer_mentions":    self._collect_mentions(self.reviewer_mention_layout),
+            "auto_notify":          self.auto_checkbox.isChecked(),
+            "notify_time":          self.time_edit.time().toString("HH:mm"),
+            "notify_interval_days": self.interval_spin.value(),
+            "start_date":           self.start_date_edit.date().toString("yyyy-MM-dd"),
+            "end_date":             self.end_date_edit.date().toString("yyyy-MM-dd"),
+        })
 
         config_path = get_config_path(self.cfg["deadline_id"])
         with open(config_path, "w", encoding="utf-8") as f:

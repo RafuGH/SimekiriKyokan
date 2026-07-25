@@ -47,11 +47,16 @@ SimekiriKyokan/
 │   ├─ task_scheduler.py      # タスクスケジューラ／管理者権限まわり
 │   ├─ task_manager_window.py # タスク管理ウィンドウ
 │   ├─ task_edit_dialog.py    # タスク編集ダイアログ
-│   ├─ widgets.py             # 共通ウィジェット
+│   ├─ widgets.py             # 共通ウィジェット（メンション行入力）
+│   ├─ theme.py               # カラートークン／スタイルシート
+│   ├─ help_widgets.py        # フィールドごとのコンテキストヘルプ
+│   ├─ account_badge.py       # タイトルバーのGoogleアカウント表示
+│   ├─ google_auth_mixin.py   # Google認可ボタンの共通ロジック
 │   ├─ webhook_client.py      # Webhook送信（Discord/Slack/Teams等）
 │   ├─ task_image.py          # 作業リスト画像の生成
 │   ├─ data_loader.py         # Excel/Googleスプレッドシート読み込み
-│   └─ google_auth_helper.py  # Google OAuth連携
+│   ├─ google_auth_helper.py  # Google OAuth連携
+│   └─ simekiri_2_1_run.bat   # 開発時のローカル起動用スクリプト
 │
 ├─ README.md
 └─ requirements.txt
