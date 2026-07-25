@@ -1,131 +1,578 @@
-#simekiri_gui.py
+# -*- coding: utf-8 -*-
+# simekiri_gui.py  ── PyQt6 / Fluent-inspired design / Google OAuth2 / Help system
 
 import ctypes
 import sys, os, json, shutil, traceback
-from datetime import datetime, timedelta
-import subprocess
-import re
+from datetime import datetime
+import re, uuid
+
 import simekiri_notify
 import google_auth_helper
-import uuid
 
-from PyQt6.QtWidgets import *
-from PyQt6.QtCore import QTime, QDate, Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QDialog, QScrollArea,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
+    QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox,
+    QCheckBox, QDateEdit, QTimeEdit, QFileDialog,
+    QMessageBox, QTableWidget, QTableWidgetItem,
+    QSizePolicy, QFrame, QTextBrowser, QToolButton,
+    QGraphicsDropShadowEffect
+)
+from PyQt6.QtCore import (
+    QTime, QDate, Qt, QTimer, pyqtSlot,
+    QSize, QPropertyAnimation, QEasingCurve
+)
+from PyQt6.QtGui import (
+    QColor, QPalette, QFont, QFontDatabase,
+    QIcon, QPixmap, QPainter, QBrush, QPen,
+    QLinearGradient
+)
 from functools import partial
-
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
-
-ShellExecuteW = ctypes.windll.shell32.ShellExecuteW
-
-APP_DIR = os.path.join(os.environ["LOCALAPPDATA"], "SimekiriKyokan")
-os.makedirs(APP_DIR, exist_ok=True)
-
-def get_config_path(deadline_id):
-    return os.path.join(APP_DIR, f"{deadline_id}.json")
-
-ERROR_LOG = os.path.join(APP_DIR, "gui_error_log.txt")
-
-TASK_BASE_NAME = "SimekiriKyokan"
-
-def get_task_name(deadline_id):
-    return f"{TASK_BASE_NAME}_{deadline_id}"
-
-ADMIN_FLAG = "--admin-register"
-
-def generate_deadline_id(category, end_date_str, title):
-    safe_title = re.sub(r'[^a-zA-Z0-9ぁ-んァ-ン一-龯]', '', title)[:10]
-    uid = uuid.uuid4().hex[:6]
-    return f"{category}_{safe_title}_{uid}"
-
-def task_exists(deadline_id):
-    try:
-        import win32com.client
-        service = win32com.client.Dispatch("Schedule.Service")
-        service.Connect()
-        service.GetFolder("\\").GetTask(get_task_name(deadline_id))
-        return True
-    except:
-        return False
-
-def get_simekiri_tasks():
-    import win32com.client
-    service = win32com.client.Dispatch("Schedule.Service")
-    service.Connect()
-    root = service.GetFolder("\\")
-    tasks = root.GetTasks(0)
-    result = []
-    for task in tasks:
-        if task.Name.startswith(TASK_BASE_NAME):
-            result.append({
-                "name": task.Name,
-                "state": task.State,
-                "enabled": task.Enabled,
-                "next_run": str(task.NextRunTime),
-                "last_run": str(task.LastRunTime),
-                "last_result": task.LastTaskResult
-            })
-    return result
-
-def set_task_enabled(task_name, enabled):
-    import win32com.client
-    service = win32com.client.Dispatch("Schedule.Service")
-    service.Connect()
-    root = service.GetFolder("\\")
-    task = root.GetTask(task_name)
-    task.Enabled = enabled
-
-def get_task_config_path(deadline_id):
-    return os.path.join(APP_DIR, f"{deadline_id}.json")
-
-def register_task_admin(config):
-    import win32com.client
-    task_name = get_task_name(config["deadline_id"])
-    service = win32com.client.Dispatch("Schedule.Service")
-    service.Connect()
-    root = service.GetFolder("\\")
-    try:
-        root.DeleteTask(task_name, 0)
-    except:
-        pass
-    task_def = service.NewTask(0)
-    h, m = map(int, config["notify_time"].split(":"))
-    start_date = datetime.strptime(config["start_date"], "%Y-%m-%d")
-    end_date   = datetime.strptime(config["end_date"], "%Y-%m-%d")
-    start = start_date.replace(hour=h, minute=m, second=0)
-    end   = end_date.replace(hour=23, minute=59, second=59)
-    trigger = task_def.Triggers.Create(2)
-    trigger.StartBoundary  = start.strftime("%Y-%m-%dT%H:%M:%S")
-    trigger.EndBoundary    = end.strftime("%Y-%m-%dT%H:%M:%S")
-    trigger.DaysInterval   = max(1, config["notify_interval_days"])
-    trigger.Enabled        = True
-    action = task_def.Actions.Create(0)
-    if getattr(sys, 'frozen', False):
-        action.Path = sys.executable
-        config_path = get_config_path(config["deadline_id"])
-        action.Arguments = f'--notify "{config_path}"'
-        action.WorkingDirectory = os.path.dirname(sys.executable)
-    else:
-        action.Path = sys.executable
-        config_path = get_config_path(config["deadline_id"])
-        action.Arguments = f'"{os.path.abspath(__file__)}" --notify "{config_path}"'
-        action.WorkingDirectory = os.path.dirname(os.path.abspath(__file__))
-    task_def.Principal.LogonType = 3
-    task_def.Principal.RunLevel  = 0
-    settings = task_def.Settings
-    settings.Enabled            = True
-    settings.StartWhenAvailable = True
-    settings.ExecutionTimeLimit = "PT0S"
-    root.RegisterTaskDefinition(task_name, task_def, 6, None, None, 3)
-    config["task_registered"] = True
 
 
 # ===================================================
-# 共通ウィジェット：メンション行入力
+# カラートークン（Fluent / Windowsライク）
+# ===================================================
+
+class Colors:
+    # ライト
+    L_BG        = "#f3f3f3"   # ウィンドウ背景
+    L_SURFACE   = "#ffffff"   # カード・入力背景
+    L_SURFACE2  = "#f9f9f9"   # サブ背景
+    L_BORDER    = "#e0e0e0"   # ボーダー
+    L_TEXT      = "#1b1b1b"   # メインテキスト
+    L_TEXT2     = "#616161"   # サブテキスト
+    L_ACCENT    = "#0078d4"   # Fluent アクセントブルー
+    L_ACCENT_H  = "#106ebe"   # ホバー
+    L_ACCENT_P  = "#005a9e"   # プレス
+    L_DANGER    = "#c50f1f"   # 削除・警告
+    L_SUCCESS   = "#107c10"   # 成功
+    L_HEADER    = "#fafafa"   # タイトルバー背景
+
+    # ダーク
+    D_BG        = "#202020"
+    D_SURFACE   = "#2c2c2c"
+    D_SURFACE2  = "#383838"
+    D_BORDER    = "#404040"
+    D_TEXT      = "#ffffff"
+    D_TEXT2     = "#9d9d9d"
+    D_ACCENT    = "#60cdff"
+    D_ACCENT_H  = "#4ec9f0"
+    D_ACCENT_P  = "#3ab8e0"
+    D_DANGER    = "#ff99a4"
+    D_SUCCESS   = "#6ccb5f"
+    D_HEADER    = "#1c1c1c"
+
+
+def make_stylesheet(dark: bool) -> str:
+    c = Colors
+    if dark:
+        bg, surf, surf2, brd = c.D_BG, c.D_SURFACE, c.D_SURFACE2, c.D_BORDER
+        txt, txt2            = c.D_TEXT, c.D_TEXT2
+        acc, acc_h, acc_p    = c.D_ACCENT, c.D_ACCENT_H, c.D_ACCENT_P
+        danger, success      = c.D_DANGER, c.D_SUCCESS
+        hdr                  = c.D_HEADER
+    else:
+        bg, surf, surf2, brd = c.L_BG, c.L_SURFACE, c.L_SURFACE2, c.L_BORDER
+        txt, txt2            = c.L_TEXT, c.L_TEXT2
+        acc, acc_h, acc_p    = c.L_ACCENT, c.L_ACCENT_H, c.L_ACCENT_P
+        danger, success      = c.L_DANGER, c.L_SUCCESS
+        hdr                  = c.L_HEADER
+
+    return f"""
+/* ── ベース ── */
+QWidget {{
+    font-family: "Segoe UI", "Meiryo UI", "Yu Gothic UI", sans-serif;
+    font-size: 13px;
+    color: {txt};
+    background-color: {bg};
+}}
+QScrollArea, QScrollArea > QWidget > QWidget {{ background: {bg}; border: none; }}
+
+/* ── タイトルバー相当 ── */
+QWidget#titlebar {{
+    background-color: {hdr};
+    border-bottom: 1px solid {brd};
+}}
+
+/* ── カードフレーム ── */
+QFrame#card {{
+    background-color: {surf};
+    border: 1px solid {brd};
+    border-radius: 8px;
+}}
+
+/* ── セクションヘッダー ── */
+QLabel#section_hdr {{
+    font-size: 11px;
+    font-weight: 600;
+    color: {txt2};
+    letter-spacing: 0.8px;
+    padding: 14px 0 2px 0;
+}}
+
+/* ── フィールドラベル ── */
+QLabel#field_lbl {{
+    font-size: 12px;
+    color: {txt2};
+    padding: 4px 0 1px 0;
+}}
+
+/* ── 説明ラベル ── */
+QLabel#desc_lbl {{
+    font-size: 11px;
+    color: {txt2};
+    padding: 0;
+}}
+
+/* ── 汎用ラベル ── */
+QLabel {{ color: {txt}; background: transparent; }}
+
+/* ── 入力フィールド共通 ── */
+QLineEdit, QSpinBox, QComboBox, QTimeEdit, QDateEdit {{
+    background: {surf};
+    border: 1px solid {brd};
+    border-radius: 4px;
+    padding: 5px 10px;
+    color: {txt};
+    min-height: 30px;
+    selection-background-color: {acc};
+}}
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus,
+QTimeEdit:focus, QDateEdit:focus {{
+    border: 1.5px solid {acc};
+}}
+QLineEdit::placeholder {{ color: {txt2}; }}
+QComboBox::drop-down {{ border: none; width: 20px; }}
+QComboBox QAbstractItemView {{
+    background: {surf};
+    border: 1px solid {brd};
+    selection-background-color: {acc};
+    color: {txt};
+}}
+
+/* ── プライマリボタン ── */
+QPushButton#btn_primary {{
+    background-color: {acc};
+    color: {"#000000" if dark else "#ffffff"};
+    border: none;
+    border-radius: 4px;
+    padding: 7px 20px;
+    font-weight: 600;
+    min-height: 32px;
+}}
+QPushButton#btn_primary:hover  {{ background-color: {acc_h}; }}
+QPushButton#btn_primary:pressed {{ background-color: {acc_p}; }}
+QPushButton#btn_primary:disabled {{ background-color: {brd}; color: {txt2}; }}
+
+/* ── セカンダリボタン ── */
+QPushButton {{
+    background-color: {surf};
+    color: {txt};
+    border: 1px solid {brd};
+    border-radius: 4px;
+    padding: 6px 16px;
+    min-height: 32px;
+}}
+QPushButton:hover  {{ background-color: {surf2}; border-color: {txt2}; }}
+QPushButton:pressed {{ background-color: {brd}; }}
+QPushButton:disabled {{ color: {txt2}; }}
+
+/* ── 危険ボタン ── */
+QPushButton#btn_danger {{
+    color: {danger};
+    border-color: {danger};
+    background: transparent;
+}}
+QPushButton#btn_danger:hover {{ background-color: {"#3a1010" if dark else "#fff0f0"}; }}
+
+/* ── ヘルプボタン ── */
+QToolButton#btn_help {{
+    background: transparent;
+    border: 1px solid {brd};
+    border-radius: 10px;
+    color: {txt2};
+    font-size: 11px;
+    font-weight: 600;
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 20px;
+    max-height: 20px;
+    padding: 0;
+}}
+QToolButton#btn_help:hover {{ border-color: {acc}; color: {acc}; background: {surf2}; }}
+
+/* ── チェックボックス ── */
+QCheckBox {{ spacing: 8px; color: {txt}; }}
+QCheckBox::indicator {{
+    width: 16px; height: 16px;
+    border: 1px solid {brd};
+    border-radius: 3px;
+    background: {surf};
+}}
+QCheckBox::indicator:checked {{
+    background: {acc};
+    border-color: {acc};
+}}
+
+/* ── テーブル ── */
+QTableWidget {{
+    background: {surf};
+    border: 1px solid {brd};
+    border-radius: 6px;
+    gridline-color: {brd};
+    outline: none;
+}}
+QTableWidget::item {{ padding: 6px 10px; }}
+QTableWidget::item:selected {{
+    background: {"#004f8c" if dark else "#cce4f7"};
+    color: {txt};
+}}
+QTableWidget::item:alternate {{ background: {surf2}; }}
+QHeaderView::section {{
+    background: {surf2};
+    border: none;
+    border-bottom: 1px solid {brd};
+    padding: 6px 10px;
+    font-weight: 600;
+    font-size: 11px;
+    color: {txt2};
+}}
+
+/* ── スクロールバー ── */
+QScrollBar:vertical {{
+    width: 8px; background: transparent; margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {brd}; border-radius: 4px; min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {txt2}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+
+/* ── テキストブラウザ（ヘルプウィンドウ） ── */
+QTextBrowser {{
+    background: {surf};
+    border: none;
+    color: {txt};
+    font-size: 13px;
+    line-height: 1.6;
+}}
+
+/* ── セパレータ ── */
+QFrame[frameShape="4"] {{ color: {brd}; }}
+"""
+
+
+# ===================================================
+# ヘルプテキスト辞書
+# ===================================================
+
+HELP_TEXTS = {
+    "title": (
+        "締切名",
+        "このプロジェクトや締切の名前を入力します。\n\n"
+        "例：「夏コミ新作ゲーム」「卒業論文」\n\n"
+        "タスク管理画面での識別に使われます。"
+    ),
+    "category": (
+        "カテゴリ",
+        "プロジェクトのカテゴリを選択します。\n\n"
+        "• game ── ゲーム制作\n"
+        "• report ── レポート・論文\n"
+        "• school ── 学校課題\n"
+        "• work ── 仕事・業務\n"
+        "• personal ── 個人プロジェクト"
+    ),
+    "datasource": (
+        "データソース",
+        "タスクデータの読み込み元を選択します。\n\n"
+        "【Excel ファイル】\n"
+        "ローカルの .xlsx ファイルを使用します。\n"
+        "「テンプレート Excel を生成」でひな型を作れます。\n\n"
+        "【Google スプレッドシート】\n"
+        "Google Drive 上のスプレッドシートを使用します。\n"
+        "「Google で認可する」ボタンで事前に認証が必要です。"
+    ),
+    "google_auth": (
+        "Google 認証について",
+        "Google Sheets を使うには一度だけ認証が必要です。\n\n"
+        "【手順】\n"
+        "1. Google Cloud Console でプロジェクトを作成\n"
+        "2. Google Sheets API を有効化\n"
+        "3. OAuth 2.0 クライアントIDを作成\n"
+        "   （リダイレクト URI: http://localhost:8080/callback）\n"
+        "4. credentials.json をダウンロードして以下に配置：\n"
+        "   %LOCALAPPDATA%\\SimekiriKyokan\\credentials.json\n\n"
+        "【403エラーが出る場合】\n"
+        "Google Cloud Console → OAuth同意画面 →\n"
+        "「テストユーザー」にあなたの Gmail を追加してください。"
+    ),
+    "webhook": (
+        "Webhook URL",
+        "通知を送信する先の Webhook URL を入力します。\n\n"
+        "URLから送信先が自動判定されます：\n"
+        "• Discord ── discord.com/api/webhooks/...\n"
+        "• Slack ── hooks.slack.com/...\n"
+        "• Teams ── outlook.office.com/webhook/...\n"
+        "• Chatwork ── chatwork.com/...\n"
+        "• Google Chat ── chat.googleapis.com/...\n\n"
+        "画像送信対応：Discord・Teams・Google Chat"
+    ),
+    "days_before": (
+        "締切前通知日数",
+        "締切の何日前から通知を送り始めるかを設定します。\n\n"
+        "• 0 ── 当日と過ぎた分のみ\n"
+        "• 3 ── 3日前〜当日（推奨）\n"
+        "• 7 ── 1週間前から\n\n"
+        "締切を過ぎたタスクも常に通知されます。"
+    ),
+    "mention": (
+        "メンション設定",
+        "通知メッセージに担当者へのメンションを付けます。\n\n"
+        "「担当名」── Excelの「担当」列に入力されている名前\n"
+        "「ユーザーID」── 各プラットフォームのID\n\n"
+        "Discord の場合：ユーザーIDまたはユーザー名\n"
+        "Slack の場合：UXXXXXXXX 形式のメンバーID\n"
+        "Teams の場合：表示名\n"
+        "Chatwork の場合：数字のユーザーID"
+    ),
+    "reviewer": (
+        "確認待ち通知",
+        "Excelで進捗が「確認待ち」になったタスクを、\n"
+        "担当者ではなくレビュアーに通知します。\n\n"
+        "「確認待ち」タスクは通常の締切通知からは除外され、\n"
+        "レビュアー専用の通知として別途送信されます。\n\n"
+        "Webhook URL を空欄にすると、メインと同じURLを使用します。"
+    ),
+    "auto_notify": (
+        "自動連絡",
+        "Windowsのタスクスケジューラを使って、\n"
+        "指定した時刻に自動で通知を送信します。\n\n"
+        "【注意】登録には管理者権限が必要です。\n\n"
+        "• 送信時刻 ── 毎日この時刻に通知\n"
+        "• 送信頻度 ── N日おきに送信（1=毎日）\n"
+        "• 制作期間 ── この期間中のみ自動送信"
+    ),
+}
+
+
+# ===================================================
+# ユーティリティ関数
+# ===================================================
+
+def is_admin():
+    try: return ctypes.windll.shell32.IsUserAnAdmin()
+    except: return False
+
+ShellExecuteW  = ctypes.windll.shell32.ShellExecuteW
+APP_DIR        = os.path.join(os.environ["LOCALAPPDATA"], "SimekiriKyokan")
+os.makedirs(APP_DIR, exist_ok=True)
+ERROR_LOG      = os.path.join(APP_DIR, "gui_error_log.txt")
+TASK_BASE_NAME = "SimekiriKyokan"
+ADMIN_FLAG     = "--admin-register"
+
+def get_config_path(did):      return os.path.join(APP_DIR, f"{did}.json")
+def get_task_config_path(did): return os.path.join(APP_DIR, f"{did}.json")
+def get_task_name(did):        return f"{TASK_BASE_NAME}_{did}"
+
+def generate_deadline_id(cat, end, title):
+    safe = re.sub(r'[^a-zA-Z0-9ぁ-んァ-ン一-龯]', '', title)[:10]
+    return f"{cat}_{safe}_{uuid.uuid4().hex[:6]}"
+
+def task_exists(did):
+    try:
+        import win32com.client
+        s = win32com.client.Dispatch("Schedule.Service"); s.Connect()
+        s.GetFolder("\\").GetTask(get_task_name(did)); return True
+    except: return False
+
+def get_simekiri_tasks():
+    import win32com.client
+    s = win32com.client.Dispatch("Schedule.Service"); s.Connect()
+    return [
+        {"name": t.Name, "state": t.State, "enabled": t.Enabled,
+         "next_run": str(t.NextRunTime), "last_run": str(t.LastRunTime),
+         "last_result": t.LastTaskResult}
+        for t in s.GetFolder("\\").GetTasks(0)
+        if t.Name.startswith(TASK_BASE_NAME)
+    ]
+
+def register_task_admin(cfg):
+    import win32com.client
+    tn = get_task_name(cfg["deadline_id"])
+    s = win32com.client.Dispatch("Schedule.Service"); s.Connect()
+    root = s.GetFolder("\\")
+    try: root.DeleteTask(tn, 0)
+    except: pass
+    td = s.NewTask(0)
+    h, m = map(int, cfg["notify_time"].split(":"))
+    st = datetime.strptime(cfg["start_date"], "%Y-%m-%d").replace(hour=h, minute=m)
+    en = datetime.strptime(cfg["end_date"],   "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+    tr = td.Triggers.Create(2)
+    tr.StartBoundary = st.strftime("%Y-%m-%dT%H:%M:%S")
+    tr.EndBoundary   = en.strftime("%Y-%m-%dT%H:%M:%S")
+    tr.DaysInterval  = max(1, cfg["notify_interval_days"]); tr.Enabled = True
+    ac = td.Actions.Create(0)
+    cp = get_config_path(cfg["deadline_id"])
+    if getattr(sys, "frozen", False):
+        ac.Path = sys.executable; ac.Arguments = f'--notify "{cp}"'
+        ac.WorkingDirectory = os.path.dirname(sys.executable)
+    else:
+        ac.Path = sys.executable
+        ac.Arguments = f'"{os.path.abspath(__file__)}" --notify "{cp}"'
+        ac.WorkingDirectory = os.path.dirname(os.path.abspath(__file__))
+    td.Principal.LogonType = 3; td.Principal.RunLevel = 0
+    td.Settings.Enabled = True; td.Settings.StartWhenAvailable = True
+    td.Settings.ExecutionTimeLimit = "PT0S"
+    root.RegisterTaskDefinition(tn, td, 6, None, None, 3)
+    cfg["task_registered"] = True
+
+
+# ===================================================
+# 共通ウィジェット：ヘルプボタン
+# ===================================================
+
+class HelpButton(QToolButton):
+    """「?」マークの小さなヘルプボタン"""
+    def __init__(self, key: str, parent=None):
+        super().__init__(parent)
+        self.help_key = key
+        self.setText("?")
+        self.setObjectName("btn_help")
+        self.setFixedSize(20, 20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clicked.connect(self._show_help)
+
+    def _show_help(self):
+        title, body = HELP_TEXTS.get(self.help_key, ("ヘルプ", "説明がありません。"))
+        dlg = HelpDialog(title, body, self.window())
+        dlg.exec()
+
+
+class HelpDialog(QDialog):
+    """ヘルプ表示ダイアログ"""
+    def __init__(self, title: str, body: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"ヘルプ – {title}")
+        self.setFixedWidth(420)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog |
+            Qt.WindowType.WindowCloseButtonHint
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+
+        hdr = QLabel(title)
+        hdr.setStyleSheet("font-size:15px; font-weight:600;")
+        layout.addWidget(hdr)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(sep)
+
+        browser = QTextBrowser()
+        browser.setPlainText(body)
+        browser.setMinimumHeight(120)
+        browser.setMaximumHeight(320)
+        layout.addWidget(browser)
+
+        close_btn = QPushButton("閉じる")
+        close_btn.setObjectName("btn_primary")
+        close_btn.setFixedWidth(80)
+        close_btn.clicked.connect(self.accept)
+        row = QHBoxLayout(); row.addStretch(); row.addWidget(close_btn)
+        layout.addLayout(row)
+
+
+# ===================================================
+# フィールド行ヘルパー（ラベル + ヘルプボタン）
+# ===================================================
+
+def field_row(label_text: str, help_key: str = None) -> QHBoxLayout:
+    """「ラベル ─ ヘルプボタン」の横並びレイアウトを返す"""
+    row = QHBoxLayout(); row.setContentsMargins(0, 6, 0, 2)
+    lbl = QLabel(label_text); lbl.setObjectName("field_lbl")
+    row.addWidget(lbl)
+    if help_key:
+        row.addWidget(HelpButton(help_key))
+    row.addStretch()
+    return row
+
+
+def section_header(text: str) -> QLabel:
+    lbl = QLabel(text.upper()); lbl.setObjectName("section_hdr")
+    return lbl
+
+
+# ===================================================
+# Google アカウント表示ウィジェット
+# ===================================================
+
+class AccountBadge(QWidget):
+    """ヘッダー右端に表示するアカウントバッジ"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(6)
+
+        self.icon_lbl = QLabel()
+        self.icon_lbl.setFixedSize(22, 22)
+        self.name_lbl = QLabel()
+        self.name_lbl.setObjectName("desc_lbl")
+
+        layout.addWidget(self.icon_lbl)
+        layout.addWidget(self.name_lbl)
+        self.refresh()
+
+    def refresh(self):
+        if google_auth_helper.has_token():
+            # トークンからメールを取得
+            try:
+                creds = google_auth_helper.get_creds()
+                import json as _json
+                token_path = google_auth_helper.TOKEN_PATH
+                with open(token_path, "r") as f:
+                    data = _json.load(f)
+                email = data.get("client_id", "").split("-")[0] if "client_id" in data else ""
+                # id_token からメールを取得試み
+                id_tok = data.get("id_token", "")
+                if id_tok:
+                    import base64
+                    payload = id_tok.split(".")[1]
+                    payload += "=" * (-len(payload) % 4)
+                    info = _json.loads(base64.b64decode(payload))
+                    email = info.get("email", email)
+                display = email if email else "認証済み"
+            except Exception:
+                display = "認証済み"
+
+            self._draw_icon(True)
+            self.name_lbl.setText(display)
+            self.setToolTip(f"Google アカウント: {display}")
+        else:
+            self._draw_icon(False)
+            self.name_lbl.setText("未ログイン")
+            self.setToolTip("Google Sheets を使う場合は認可が必要です")
+
+    def _draw_icon(self, logged_in: bool):
+        pix = QPixmap(22, 22)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor("#107c10") if logged_in else QColor("#797979")
+        p.setBrush(QBrush(color))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(0, 0, 22, 22)
+        p.setPen(QPen(QColor("white")))
+        p.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "G" if logged_in else "—")
+        p.end()
+        self.icon_lbl.setPixmap(pix)
+
+
+# ===================================================
+# メンション行入力
 # ===================================================
 
 class RowInput(QWidget):
@@ -133,16 +580,14 @@ class RowInput(QWidget):
         super().__init__()
         self.parent_layout = parent_layout
         layout = QHBoxLayout(self)
-        self.short = QLineEdit()
-        self.short.setPlaceholderText(short_ph)
-        self.long = QLineEdit()
-        self.long.setPlaceholderText(long_ph)
-        self.add_btn = QPushButton("＋")
-        self.del_btn = QPushButton("－")
+        layout.setContentsMargins(0, 2, 0, 2); layout.setSpacing(6)
+        self.short = QLineEdit(); self.short.setPlaceholderText(short_ph)
+        self.long  = QLineEdit(); self.long.setPlaceholderText(long_ph)
+        self.add_btn = QPushButton("＋"); self.add_btn.setFixedWidth(34)
+        self.del_btn = QPushButton("－"); self.del_btn.setFixedWidth(34)
         self.add_btn.clicked.connect(self.add)
         self.del_btn.clicked.connect(self.delete)
-        if not deletable:
-            self.del_btn.setEnabled(False)
+        if not deletable: self.del_btn.setEnabled(False)
         for w in (self.short, self.long, self.add_btn, self.del_btn):
             layout.addWidget(w)
 
@@ -150,88 +595,102 @@ class RowInput(QWidget):
         self.del_btn.setEnabled(self.parent_layout.count() > 1)
 
     def add(self):
-        row = RowInput("担当名", "ユーザーID", self.parent_layout)
-        self.parent_layout.addWidget(row)
-        self.update_all()
+        r = RowInput(self.short.placeholderText(), self.long.placeholderText(), self.parent_layout)
+        self.parent_layout.addWidget(r); self.update_all()
 
     def delete(self):
-        if self.parent_layout.count() <= 1:
-            return
-        self.parent_layout.removeWidget(self)
-        self.deleteLater()
-        self.update_all()
+        if self.parent_layout.count() <= 1: return
+        self.parent_layout.removeWidget(self); self.deleteLater(); self.update_all()
 
     def update_all(self):
         for i in range(self.parent_layout.count()):
             w = self.parent_layout.itemAt(i).widget()
-            if isinstance(w, RowInput):
-                w.update_delete_state()
+            if isinstance(w, RowInput): w.update_delete_state()
 
-    def get(self):
-        return self.short.text(), self.long.text()
+    def get(self): return self.short.text(), self.long.text()
+
+
+# ===================================================
+# Google 認可ミックスイン
+# ===================================================
+
+class GoogleAuthMixin:
+    def _authorize_google(self):
+        self.auth_btn.setEnabled(False)
+        self.auth_status_label.setText("🔄 ブラウザで認可中…")
+        def _cb(ok, msg):
+            QTimer.singleShot(0, lambda: self._on_auth_done(ok, msg))
+        google_auth_helper.authorize_google_sheets(_cb)
+
+    def _on_auth_done(self, ok, msg):
+        if ok: QMessageBox.information(self, "Google 認証", msg)
+        else:   QMessageBox.warning(self,   "Google 認証", msg)
+        self._refresh_auth_label()
+        # アカウントバッジを更新
+        if hasattr(self, "account_badge"):
+            self.account_badge.refresh()
+
+    def _refresh_auth_label(self):
+        ok = google_auth_helper.has_token()
+        self.auth_status_label.setText("✅ 認可済み" if ok else "❌ 未認可")
+        self.auth_btn.setEnabled(not ok)
 
 
 # ===================================================
 # メインGUI
 # ===================================================
 
-class NotifierApp(QWidget):
+class NotifierApp(GoogleAuthMixin, QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("締切教官 v3.0")
-        self.resize(560, 900)
+        self.setWindowTitle("締切教官")
+        self.setMinimumWidth(560)
+        self.resize(580, 880)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        inner = QWidget()
+        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.setStyleSheet(make_stylesheet(dark))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ---- タイトルバー ----
+        titlebar = QWidget(); titlebar.setObjectName("titlebar")
+        tb_layout = QHBoxLayout(titlebar)
+        tb_layout.setContentsMargins(16, 10, 12, 10)
+        app_lbl = QLabel("締切教官")
+        app_lbl.setStyleSheet("font-size:15px; font-weight:700; letter-spacing:0.5px;")
+        self.account_badge = AccountBadge()
+        tb_layout.addWidget(app_lbl)
+        tb_layout.addStretch()
+        tb_layout.addWidget(self.account_badge)
+        root.addWidget(titlebar)
+
+        # ---- スクロール本体 ----
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        inner  = QWidget()
         layout = QVBoxLayout(inner)
-        scroll_area.setWidget(inner)
+        layout.setContentsMargins(20, 16, 20, 24)
+        layout.setSpacing(2)
+        scroll.setWidget(inner)
+        root.addWidget(scroll)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll_area)
+        # ━━ 基本情報 ━━
+        layout.addWidget(section_header("基本情報"))
 
-        palette = self.palette()
-        base_color = palette.color(palette.ColorRole.Window)
-        is_dark = base_color.lightness() < 128
-
-        # ---- タイトル行 ----
-        title_row = QHBoxLayout()
-        title_label = QLabel("締切名")
-        self.help_btn = QPushButton("？")
-        self.help_btn.setFixedSize(24, 24)
-        if is_dark:
-            self.help_btn.setStyleSheet("""
-                QPushButton { font-size:14px; font-weight:bold;
-                    border:1px solid palette(mid); border-radius:4px;
-                    padding:0px; background-color: palette(button); color: palette(button-text); }
-                QPushButton:hover { background-color: palette(light); }
-            """)
-        else:
-            self.help_btn.setStyleSheet("""
-                QPushButton { font-size:14px; font-weight:bold;
-                    border:1px solid #cccccc; border-radius:4px;
-                    padding:0px; background-color: #f5f5f5; color: black; }
-                QPushButton:hover { background-color: #e0e0e0; }
-            """)
-        title_label.setContentsMargins(0, 20, 0, 0)
-        self.help_btn.clicked.connect(self.open_manual)
-        title_row.addWidget(title_label)
-        title_row.addStretch()
-        title_row.addWidget(self.help_btn)
-        layout.addLayout(title_row)
-
+        layout.addLayout(field_row("締切名", "title"))
         self.title_input = QLineEdit()
+        self.title_input.setPlaceholderText("例：夏コミ新作ゲーム")
         layout.addWidget(self.title_input)
 
-        # ---- カテゴリ ----
-        layout.addWidget(QLabel("カテゴリ"))
+        layout.addLayout(field_row("カテゴリ", "category"))
         self.category_combo = QComboBox()
-        self.category_combo.addItems(["report", "game", "school", "work", "personal"])
+        self.category_combo.addItems(["game", "report", "school", "work", "personal"])
         layout.addWidget(self.category_combo)
 
-        # ---- データソース切り替え ----
-        layout.addWidget(QLabel("──────── データソース ────────"))
+        # ━━ データソース ━━
+        layout.addWidget(section_header("データソース"))
+        layout.addLayout(field_row("読み込み元", "datasource"))
         self.source_combo = QComboBox()
         self.source_combo.addItems(["Excel ファイル", "Google スプレッドシート"])
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
@@ -239,445 +698,295 @@ class NotifierApp(QWidget):
 
         # Excel 欄
         self.excel_group = QWidget()
-        excel_vl = QVBoxLayout(self.excel_group)
-        excel_vl.setContentsMargins(0, 0, 0, 0)
-        excel_vl.addWidget(QLabel("Excelファイル"))
-        excel_hl = QHBoxLayout()
+        evl = QVBoxLayout(self.excel_group)
+        evl.setContentsMargins(0, 4, 0, 0); evl.setSpacing(4)
+        evl.addLayout(field_row("Excel ファイルのパス"))
+        ehl = QHBoxLayout(); ehl.setSpacing(6)
         self.excel_input = QLineEdit()
-        btn_excel = QPushButton("参照")
-        btn_excel.clicked.connect(self.browse_excel)
-        excel_hl.addWidget(self.excel_input)
-        excel_hl.addWidget(btn_excel)
-        excel_vl.addLayout(excel_hl)
-        self.gen_excel_btn = QPushButton("Excelを生成")
+        self.excel_input.setPlaceholderText("Tasks.xlsx を選択…")
+        btn_e = QPushButton("参照"); btn_e.setFixedWidth(64)
+        btn_e.clicked.connect(self.browse_excel)
+        ehl.addWidget(self.excel_input); ehl.addWidget(btn_e)
+        evl.addLayout(ehl)
+        self.gen_excel_btn = QPushButton("テンプレート Excel を生成")
         self.gen_excel_btn.clicked.connect(self.generate_excel)
-        excel_vl.addWidget(self.gen_excel_btn)
+        evl.addWidget(self.gen_excel_btn)
         layout.addWidget(self.excel_group)
 
-        # Google Sheets 欄
+        # Sheets 欄
         self.sheets_group = QWidget()
-        sheets_vl = QVBoxLayout(self.sheets_group)
-        sheets_vl.setContentsMargins(0, 0, 0, 0)
-        sheets_vl.addWidget(QLabel("スプレッドシート URL"))
+        svl = QVBoxLayout(self.sheets_group)
+        svl.setContentsMargins(0, 4, 0, 0); svl.setSpacing(4)
+        svl.addLayout(field_row("スプレッドシート URL", "google_auth"))
         self.sheets_url_input = QLineEdit()
         self.sheets_url_input.setPlaceholderText("https://docs.google.com/spreadsheets/d/...")
-        sheets_vl.addWidget(self.sheets_url_input)
-        
-        # Google 認可ボタン＋状態表示
-        auth_hl = QHBoxLayout()
-        self.auth_btn = QPushButton("🔐 Google で認可する")
+        svl.addWidget(self.sheets_url_input)
+        auth_hl = QHBoxLayout(); auth_hl.setSpacing(10)
+        self.auth_btn = QPushButton("🔐  Google で認可する")
+        self.auth_btn.setObjectName("btn_primary")
         self.auth_btn.clicked.connect(self._authorize_google)
-        self.auth_status_label = QLabel("❌ 未認可")
+        self.auth_status_label = QLabel()
         auth_hl.addWidget(self.auth_btn)
         auth_hl.addWidget(self.auth_status_label)
         auth_hl.addStretch()
-        sheets_vl.addLayout(auth_hl)
-        
+        svl.addLayout(auth_hl)
         layout.addWidget(self.sheets_group)
-        self.sheets_group.setVisible(False)   # 初期は非表示
-        self._update_auth_status()
+        self.sheets_group.setVisible(False)
+        self._refresh_auth_label()
 
-        # ---- Webhook URL ----
-        layout.addWidget(QLabel("──────── 通知先 ────────"))
-
-        webhook_label = QLabel(
-            "Webhook URL（Discord / Slack / Teams / Chatwork / Google Chat）\n"
-            "自動判定されます。画像送信：Discord/Teams/Google Chat 対応"
-        )
-        webhook_label.setWordWrap(True)
-        layout.addWidget(webhook_label)
+        # ━━ 通知先 ━━
+        layout.addWidget(section_header("通知先"))
+        layout.addLayout(field_row("Webhook URL", "webhook"))
         self.webhook_input = QLineEdit()
         self.webhook_input.setPlaceholderText("https://discord.com/api/webhooks/...")
         layout.addWidget(self.webhook_input)
 
-        # ---- 締切前日数 ----
-        layout.addWidget(QLabel("締切何日前に通知"))
-        self.days_spin = QSpinBox()
-        self.days_spin.setRange(0, 60)
+        layout.addLayout(field_row("締切何日前に通知", "days_before"))
+        self.days_spin = QSpinBox(); self.days_spin.setRange(0, 60)
+        self.days_spin.setFixedWidth(100)
         layout.addWidget(self.days_spin)
 
-        # ---- メンション ----
-        self.mention_checkbox = QCheckBox("メンションを有効（任意）")
+        # メンション
+        layout.addLayout(field_row("担当者メンション（任意）", "mention"))
+        self.mention_checkbox = QCheckBox("メンションを有効にする")
         layout.addWidget(self.mention_checkbox)
-        mention_box = QWidget()
-        mention_l = QVBoxLayout(mention_box)
-        mention_l.setContentsMargins(20, 0, 0, 0)
-        self.mention_layout = mention_l
+        mb = QWidget()
+        ml = QVBoxLayout(mb); ml.setContentsMargins(20,0,0,0); ml.setSpacing(2)
+        self.mention_layout = ml
         self.mention_layout.addWidget(RowInput("担当名", "ユーザーID", self.mention_layout, False))
-        layout.addWidget(mention_box)
+        layout.addWidget(mb)
 
-        # ---- 確認待ち通知先（レビュアー） ----
-        layout.addWidget(QLabel("──────── 確認待ち通知 ────────"))
-        self.reviewer_checkbox = QCheckBox("確認待ちタスクを別の人に通知する（任意）")
+        # ━━ 確認待ち通知 ━━
+        layout.addWidget(section_header("確認待ち通知"))
+        layout.addLayout(field_row("レビュアーへの通知（任意）", "reviewer"))
+        self.reviewer_checkbox = QCheckBox("確認待ちタスクを別の担当者に通知する")
         layout.addWidget(self.reviewer_checkbox)
         self.reviewer_checkbox.stateChanged.connect(self._on_reviewer_toggled)
 
         self.reviewer_group = QWidget()
-        reviewer_vl = QVBoxLayout(self.reviewer_group)
-        reviewer_vl.setContentsMargins(20, 0, 0, 0)
-
-        reviewer_webhook_label = QLabel(
-            "レビュアー通知先 Webhook URL\n"
-            "（同じプラットフォーム対応。空欄で上の URL を使用）"
-        )
-        reviewer_webhook_label.setWordWrap(True)
-        reviewer_vl.addWidget(reviewer_webhook_label)
+        rvl = QVBoxLayout(self.reviewer_group)
+        rvl.setContentsMargins(20, 4, 0, 0); rvl.setSpacing(4)
+        rvl.addLayout(field_row("レビュアー Webhook URL（省略可）"))
         self.reviewer_webhook_input = QLineEdit()
-        self.reviewer_webhook_input.setPlaceholderText("省略可（空欄 = 同じ Webhook に送信）")
-        reviewer_vl.addWidget(self.reviewer_webhook_input)
-
-        reviewer_vl.addWidget(QLabel("レビュアーのメンション設定（担当名 → レビュアーID）"))
+        self.reviewer_webhook_input.setPlaceholderText("省略すると上の URL を使用")
+        rvl.addWidget(self.reviewer_webhook_input)
+        rvl.addLayout(field_row("レビュアーのメンション"))
         self.reviewer_mention_layout = QVBoxLayout()
+        self.reviewer_mention_layout.setSpacing(2)
         self.reviewer_mention_layout.addWidget(
             RowInput("担当名", "レビュアーID", self.reviewer_mention_layout, False)
         )
-        reviewer_mention_box = QWidget()
-        reviewer_mention_box.setLayout(self.reviewer_mention_layout)
-        reviewer_vl.addWidget(reviewer_mention_box)
-
+        rvm = QWidget(); rvm.setLayout(self.reviewer_mention_layout)
+        rvl.addWidget(rvm)
         layout.addWidget(self.reviewer_group)
         self.reviewer_group.setVisible(False)
 
-        # ---- 自動連絡 ----
-        layout.addWidget(QLabel("──────── 自動連絡 ────────"))
-        self.auto_checkbox = QCheckBox("自動連絡を有効（任意）")
+        # ━━ 自動連絡 ━━
+        layout.addWidget(section_header("自動連絡"))
+        layout.addLayout(field_row("タスクスケジューラ連携（任意）", "auto_notify"))
+        self.auto_checkbox = QCheckBox("自動送信を有効にする")
         layout.addWidget(self.auto_checkbox)
 
-        t_l = QHBoxLayout()
-        t_l.addWidget(QLabel("連絡時刻"))
+        tl = QHBoxLayout(); tl.setSpacing(10)
+        tl.addWidget(QLabel("送信時刻"))
         self.time_edit = QTimeEdit(QTime(9, 0))
-        t_l.addWidget(self.time_edit)
-        layout.addLayout(t_l)
+        self.time_edit.setFixedWidth(100)
+        tl.addWidget(self.time_edit)
+        tl.addSpacing(20)
+        tl.addWidget(QLabel("頻度（日おき）"))
+        self.interval_spin = QSpinBox(); self.interval_spin.setRange(1, 30)
+        self.interval_spin.setFixedWidth(80)
+        tl.addWidget(self.interval_spin); tl.addStretch()
+        layout.addLayout(tl)
 
-        i_l = QHBoxLayout()
-        i_l.addWidget(QLabel("連絡頻度（日）"))
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(1, 30)
-        i_l.addWidget(self.interval_spin)
-        layout.addLayout(i_l)
-
-        layout.addWidget(QLabel("制作期間"))
-        d_l = QHBoxLayout()
+        layout.addLayout(field_row("制作期間"))
+        dl = QHBoxLayout(); dl.setSpacing(8)
         self.start_date = QDateEdit(QDate.currentDate())
         self.start_date.setCalendarPopup(True)
         self.end_date = QDateEdit(QDate.currentDate().addYears(1))
         self.end_date.setCalendarPopup(True)
-        d_l.addWidget(QLabel("開始日"))
-        d_l.addWidget(self.start_date)
-        d_l.addWidget(QLabel("終了日"))
-        d_l.addWidget(self.end_date)
-        layout.addLayout(d_l)
+        dl.addWidget(QLabel("開始")); dl.addWidget(self.start_date)
+        dl.addSpacing(8)
+        dl.addWidget(QLabel("終了")); dl.addWidget(self.end_date)
+        dl.addStretch()
+        layout.addLayout(dl)
 
-        # ---- ボタン ----
-        self.save_btn = QPushButton("新規作成")
-        self.run_btn  = QPushButton("通知テスト実行")
-        self.list_btn = QPushButton("締切教官管理")
-        layout.addWidget(self.save_btn)
-        layout.addWidget(self.run_btn)
-        layout.addWidget(self.list_btn)
+        # ━━ アクションボタン ━━
+        layout.addSpacing(16)
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(sep)
+        layout.addSpacing(10)
+
+        btn_row1 = QHBoxLayout(); btn_row1.setSpacing(8)
+        self.save_btn = QPushButton("新規作成して保存")
+        self.save_btn.setObjectName("btn_primary")
+        self.save_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn_row1.addWidget(self.save_btn)
+        layout.addLayout(btn_row1)
+
+        btn_row2 = QHBoxLayout(); btn_row2.setSpacing(8)
+        self.run_btn  = QPushButton("📨  通知テストを送信")
+        self.list_btn = QPushButton("⚙  締切教官を管理")
+        for b in (self.run_btn, self.list_btn):
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn_row2.addWidget(b)
+        layout.addLayout(btn_row2)
+        layout.addStretch()
 
         self.save_btn.clicked.connect(self.save_config)
         self.run_btn.clicked.connect(self.run_notify)
         self.list_btn.clicked.connect(self.open_task_list)
-
         self.config = {}
 
-    def _authorize_google(self):
-        """Google Sheets の認可フローを実行"""
-        def _callback(success, message):
-            QMessageBox.information(
-                self,
-                "Google Sheets 認可",
-                message
-            ) if success else QMessageBox.warning(self, "Google Sheets 認可", message)
-            if success:
-                self._update_auth_status()
+    # ---- ソース切り替え ----
+    def _on_source_changed(self, i):
+        self.excel_group.setVisible(i == 0)
+        self.sheets_group.setVisible(i == 1)
 
-        # 別スレッドで実行
-        import threading
-        t = threading.Thread(
-            target=lambda: google_auth_helper.authorize_google_sheets(_callback),
-            daemon=True
-        )
-        t.start()
-
-    def _update_auth_status(self):
-        """認可状態を表示"""
-        if google_auth_helper.has_token():
-            self.auth_status_label.setText("✅ 認可済み")
-            self.auth_btn.setEnabled(False)
-        else:
-            self.auth_status_label.setText("❌ 未認可")
-            self.auth_btn.setEnabled(True)
-
-    # ---- データソース切り替え ----
-    def _authorize_google(self):
-        """Google Sheets の認可フロー"""
-        def _callback(success, message):
-            QMessageBox.information(
-                self,
-                "Google Sheets 認可",
-                message
-            ) if success else QMessageBox.warning(self, "Google Sheets 認可", message)
-            if success:
-                self._update_auth_status_edit()
-
-        import threading
-        t = threading.Thread(
-            target=lambda: google_auth_helper.authorize_google_sheets(_callback),
-            daemon=True
-        )
-        t.start()
-
-    def _update_auth_status_edit(self):
-        """認可状態を表示"""
-        if google_auth_helper.has_token():
-            self.auth_status_label.setText("✅ 認可済み")
-            self.auth_btn.setEnabled(False)
-        else:
-            self.auth_status_label.setText("❌ 未認可")
-            self.auth_btn.setEnabled(True)
-
-    def _on_source_changed(self, index):
-        is_sheets = (index == 1)
-        self.excel_group.setVisible(not is_sheets)
-        self.sheets_group.setVisible(is_sheets)
-
-    # ---- レビュアー欄 表示切り替え ----
     def _on_reviewer_toggled(self, state):
         self.reviewer_group.setVisible(state == Qt.CheckState.Checked.value)
 
     def browse_excel(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Excelを選択", "", "Excel (*.xlsx *.xls)")
-        if p:
-            self.excel_input.setText(p)
+        p, _ = QFileDialog.getOpenFileName(self, "Excel を選択", "", "Excel (*.xlsx *.xls)")
+        if p: self.excel_input.setText(p)
 
     def open_manual(self):
-        try:
-            if getattr(sys, 'frozen', False):
-                base_dir = os.path.dirname(sys.executable)
-            else:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-            pdf_path = os.path.join(base_dir, "SimekiriKyokan_Manual.pdf")
-            if os.path.exists(pdf_path):
-                os.startfile(pdf_path)
-            else:
-                QMessageBox.warning(self, "エラー", "マニュアルPDFが見つかりません")
-        except Exception as e:
-            QMessageBox.warning(self, "エラー", f"マニュアルを開けませんでした:\n{e}")
+        base = os.path.dirname(sys.executable if getattr(sys,"frozen",False) else os.path.abspath(__file__))
+        pdf  = os.path.join(base, "SimekiriKyokan_Manual.pdf")
+        if os.path.exists(pdf): os.startfile(pdf)
+        else: QMessageBox.warning(self, "エラー", "マニュアル PDF が見つかりません")
 
     def generate_excel(self):
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-        template_path = os.path.join(base_dir, "Tasks.xlsx")
-        if not os.path.exists(template_path):
-            QMessageBox.critical(self, "エラー", f"テンプレート Excel が見つかりません:\n{template_path}")
-            return
-        save_path, _ = QFileDialog.getSaveFileName(self, "Excelを保存する場所を選択", "Tasks.xlsx", "Excel Files (*.xlsx)")
-        if not save_path:
-            return
-        if os.path.exists(save_path):
-            reply = QMessageBox.question(
-                self, "上書き確認",
-                f"既存のファイルが存在します。\n上書きしますか？\n\n{save_path}",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+        base = os.path.dirname(sys.executable if getattr(sys,"frozen",False) else os.path.abspath(__file__))
+        tmpl = os.path.join(base, "Tasks.xlsx")
+        if not os.path.exists(tmpl):
+            QMessageBox.critical(self,"エラー",f"テンプレートが見つかりません:\n{tmpl}"); return
+        dst, _ = QFileDialog.getSaveFileName(self, "保存先を選択", "Tasks.xlsx", "Excel (*.xlsx)")
+        if not dst: return
+        if os.path.exists(dst):
+            if QMessageBox.question(self,"上書き確認",f"上書きしますか？\n{dst}",
+                    QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
                 return
-        try:
-            shutil.copyfile(template_path, save_path)
-            QMessageBox.information(self, "完了", f"Excelを生成しました:\n{save_path}")
-        except Exception as e:
-            QMessageBox.critical(self, "エラー", f"生成に失敗しました:\n{str(e)}")
+        shutil.copyfile(tmpl, dst)
+        QMessageBox.information(self,"完了",f"生成しました:\n{dst}")
 
-    def _collect_mentions(self, layout_widget) -> list:
-        mentions = []
-        for i in range(layout_widget.count()):
-            w = layout_widget.itemAt(i).widget()
+    def _collect_mentions(self, lyt):
+        res = []
+        for i in range(lyt.count()):
+            w = lyt.itemAt(i).widget()
             if isinstance(w, RowInput):
-                short, long_ = w.get()
-                if short or long_:
-                    mentions.append({"name": short, "id": long_})
-        return mentions
+                s,l = w.get()
+                if s or l: res.append({"name":s,"id":l})
+        return res
 
     def save_config(self):
-        title = self.title_input.text()
+        title = self.title_input.text().strip()
         if not title:
-            QMessageBox.warning(self, "入力エラー", "締切名を入力してください")
-            return
-
+            QMessageBox.warning(self,"入力エラー","締切名を入力してください"); return
         is_sheets = (self.source_combo.currentIndex() == 1)
-
         if is_sheets:
-            if not self.sheets_url_input.text():
-                QMessageBox.warning(self, "入力エラー", "スプレッドシート URL を入力してください")
-                return
-            if not self.sheets_creds_input.text():
-                QMessageBox.warning(self, "入力エラー", "サービスアカウント認証 JSON を指定してください")
-                return
+            if not self.sheets_url_input.text().strip():
+                QMessageBox.warning(self,"入力エラー","スプレッドシート URL を入力してください"); return
+            if not google_auth_helper.has_token():
+                QMessageBox.warning(self,"入力エラー","Google 認証を先に完了してください"); return
         else:
-            if not self.excel_input.text():
-                QMessageBox.warning(self, "入力エラー", "Excelファイルを指定してください")
-                return
+            if not self.excel_input.text().strip():
+                QMessageBox.warning(self,"入力エラー","Excel ファイルを指定してください"); return
+        if not self.webhook_input.text().strip():
+            QMessageBox.warning(self,"入力エラー","Webhook URL を入力してください"); return
 
-        if not self.webhook_input.text():
-            QMessageBox.warning(self, "入力エラー", "Webhook URLを入力してください")
-            return
-
-        category  = self.category_combo.currentText()
-        end_date  = self.end_date.date().toString("yyyy-MM-dd")
-        deadline_id = generate_deadline_id(category, end_date, title)
+        cat = self.category_combo.currentText()
+        ed  = self.end_date.date().toString("yyyy-MM-dd")
+        did = generate_deadline_id(cat, ed, title)
 
         cfg = {
-            "deadline_id":          deadline_id,
-            "title":                title,
-            "category":             category,
-            # データソース
-            "data_source":          "sheets" if is_sheets else "excel",
-            "excel_path":           self.excel_input.text() if not is_sheets else "",
-            "sheets_url":           self.sheets_url_input.text() if is_sheets else "",
-            # 通知設定
+            "deadline_id": did, "title": title, "category": cat,
+            "data_source": "sheets" if is_sheets else "excel",
+            "excel_path":  self.excel_input.text() if not is_sheets else "",
+            "sheets_url":  self.sheets_url_input.text() if is_sheets else "",
             "webhook_url":          self.webhook_input.text(),
             "days_before_deadline": self.days_spin.value(),
             "mention_enabled":      self.mention_checkbox.isChecked(),
             "mentions":             self._collect_mentions(self.mention_layout),
-            # 確認待ち通知
             "reviewer_enabled":     self.reviewer_checkbox.isChecked(),
             "reviewer_webhook_url": self.reviewer_webhook_input.text(),
             "reviewer_mentions":    self._collect_mentions(self.reviewer_mention_layout),
-            # 自動通知
             "auto_notify":          self.auto_checkbox.isChecked(),
             "notify_time":          self.time_edit.time().toString("HH:mm"),
             "notify_interval_days": self.interval_spin.value(),
             "start_date":           self.start_date.date().toString("yyyy-MM-dd"),
-            "end_date":             end_date,
+            "end_date":             ed,
         }
-
-        config_path = get_config_path(deadline_id)
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-
+        cp = get_config_path(did)
+        with open(cp,"w",encoding="utf-8") as f: json.dump(cfg,f,ensure_ascii=False,indent=2)
         self.config = cfg
 
         if cfg["auto_notify"]:
             try:
                 import win32com.client
-                service = win32com.client.Dispatch("Schedule.Service")
-                service.Connect()
-                task_name = get_task_name(deadline_id)
                 if is_admin():
                     register_task_admin(cfg)
-                    QMessageBox.information(self, "保存完了", "設定を保存し、タスクを更新しました（管理者権限あり）")
+                    QMessageBox.information(self,"保存完了","設定を保存してタスクを登録しました")
                 else:
-                    reply = QMessageBox.question(
-                        self, "管理者権限確認",
-                        "タスク登録には管理者権限が必要です。昇格しますか？",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                    )
-                    if reply == QMessageBox.StandardButton.Yes:
-                        if getattr(sys, 'frozen', False):
-                            ShellExecuteW(None, "runas", sys.executable, f'{ADMIN_FLAG} "{config_path}"', None, 1)
-                        else:
-                            script_path = os.path.abspath(__file__)
-                            ShellExecuteW(None, "runas", sys.executable, f'"{script_path}" {ADMIN_FLAG} "{config_path}"', None, 1)
-                        QMessageBox.information(self, "保存完了", "設定を保存しました。管理者権限でタスク登録が行われます。")
+                    if QMessageBox.question(self,"管理者権限",
+                            "タスク登録には管理者権限が必要です。昇格しますか？",
+                            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                        exe = sys.executable
+                        fl  = f'{ADMIN_FLAG} "{cp}"'
+                        if not getattr(sys,"frozen",False): fl = f'"{os.path.abspath(__file__)}" ' + fl
+                        ShellExecuteW(None,"runas",exe,fl,None,1)
+                        QMessageBox.information(self,"保存完了","設定を保存しました（管理者認証待ち）")
                     else:
-                        QMessageBox.information(self, "保存完了", "設定を保存しました（タスク登録は未実行）")
+                        QMessageBox.information(self,"保存完了","設定を保存しました（タスク未登録）")
             except Exception as e:
-                QMessageBox.warning(self, "エラー", f"タスクの更新に失敗しました: {e}")
+                QMessageBox.warning(self,"エラー",f"タスク登録に失敗しました: {e}")
         else:
-            QMessageBox.information(self, "保存完了", "設定を保存しました")
-
+            QMessageBox.information(self,"保存完了","設定を保存しました")
         self._reset_form()
 
     def _reset_form(self):
         self.config = {}
-        self.title_input.clear()
-        self.excel_input.clear()
-        self.sheets_url_input.clear()
-        self.webhook_input.clear()
+        for w in (self.title_input, self.excel_input, self.sheets_url_input,
+                  self.webhook_input, self.reviewer_webhook_input):
+            w.clear()
         self.days_spin.setValue(3)
         self.mention_checkbox.setChecked(False)
-
-        for layout in (self.mention_layout, self.reviewer_mention_layout):
-            while layout.count():
-                w = layout.takeAt(0).widget()
-                if w:
-                    w.setParent(None)
-
-        self.mention_layout.addWidget(RowInput("担当名", "ユーザーID", self.mention_layout, False))
-        self.reviewer_mention_layout.addWidget(RowInput("担当名", "レビュアーID", self.reviewer_mention_layout, False))
-
         self.reviewer_checkbox.setChecked(False)
-        self.reviewer_webhook_input.clear()
         self.auto_checkbox.setChecked(False)
-        self.time_edit.setTime(QTime(9, 0))
+        self.time_edit.setTime(QTime(9,0))
         self.interval_spin.setValue(1)
         self.source_combo.setCurrentIndex(0)
+        for lyt in (self.mention_layout, self.reviewer_mention_layout):
+            while lyt.count():
+                w = lyt.takeAt(0).widget()
+                if w: w.setParent(None)
+        self.mention_layout.addWidget(RowInput("担当名","ユーザーID",self.mention_layout,False))
+        self.reviewer_mention_layout.addWidget(RowInput("担当名","レビュアーID",self.reviewer_mention_layout,False))
 
     def run_notify(self):
-        files = [f for f in os.listdir(APP_DIR) if f.endswith(".json")]
-        if not files:
-            QMessageBox.warning(self, "エラー", "保存された設定がありません")
-            return
-        files.sort(key=lambda x: os.path.getmtime(os.path.join(APP_DIR, x)), reverse=True)
-        config_path = os.path.join(APP_DIR, files[0])
-        simekiri_notify.run_notify(config_path, test_mode=True)
+        files = sorted([f for f in os.listdir(APP_DIR) if f.endswith(".json")],
+                       key=lambda x: os.path.getmtime(os.path.join(APP_DIR,x)),reverse=True)
+        if not files: QMessageBox.warning(self,"エラー","保存された設定がありません"); return
+        simekiri_notify.run_notify(os.path.join(APP_DIR,files[0]),test_mode=True)
 
     def open_task_list(self):
         self.task_list_window = TaskManagerWindow(self)
         self.task_list_window.show()
 
-    def run_as_admin_and_register(self):
-        if not is_admin():
-            if getattr(sys, 'frozen', False):
-                config_path = get_config_path(self.config["deadline_id"])
-                ShellExecuteW(None, "runas", sys.executable, f'{ADMIN_FLAG} "{config_path}"', None, 1)
-            else:
-                script_path = os.path.abspath(__file__)
-                config_path = get_config_path(self.config["deadline_id"])
-                ShellExecuteW(None, "runas", sys.executable, f'"{script_path}" {ADMIN_FLAG} "{config_path}"', None, 1)
-            return
-        register_task_admin(self.config)
-
-    def check_first_run_task(self):
-        if "deadline_id" not in self.config:
-            return
-        if not self.config.get("auto_notify"):
-            return
-        if task_exists(self.config["deadline_id"]):
-            return
-        reply = QMessageBox.question(
-            self, "自動起動の設定", "タスクスケジューラに登録しますか？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.run_as_admin_and_register()
-
     def update_task(self, cfg):
-        task_name   = get_task_name(cfg["deadline_id"])
-        config_path = get_config_path(cfg["deadline_id"])
+        tn = get_task_name(cfg["deadline_id"]); cp = get_config_path(cfg["deadline_id"])
         if is_admin():
             try:
                 import win32com.client
-                service = win32com.client.Dispatch("Schedule.Service")
-                service.Connect()
-                folder = service.GetFolder("\\")
-                try:
-                    folder.DeleteTask(task_name, 0)
-                except:
-                    pass
+                s = win32com.client.Dispatch("Schedule.Service"); s.Connect()
+                try: s.GetFolder("\\").DeleteTask(tn,0)
+                except: pass
                 register_task_admin(cfg)
-            except Exception as e:
-                QMessageBox.warning(self, "タスク更新失敗", str(e))
+            except Exception as e: QMessageBox.warning(self,"タスク更新失敗",str(e))
             return
-        if getattr(sys, 'frozen', False):
-            ShellExecuteW(None, "runas", sys.executable, f'{ADMIN_FLAG} "{config_path}"', None, 1)
-        else:
-            script_path = os.path.abspath(__file__)
-            ShellExecuteW(None, "runas", sys.executable, f'"{script_path}" {ADMIN_FLAG} "{config_path}"', None, 1)
+        fl = f'{ADMIN_FLAG} "{cp}"'
+        if not getattr(sys,"frozen",False): fl = f'"{os.path.abspath(__file__)}" ' + fl
+        ShellExecuteW(None,"runas",sys.executable,fl,None,1)
 
 
 # ===================================================
@@ -688,183 +997,123 @@ class TaskManagerWindow(QWidget):
     def __init__(self, main_app):
         super().__init__()
         self.main_app = main_app
-        self.setWindowTitle("タスク管理")
-        self.resize(800, 400)
+        self.setWindowTitle("締切教官 – 管理")
+        self.resize(900, 460)
+
+        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.setStyleSheet(make_stylesheet(dark))
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20,16,20,20); layout.setSpacing(12)
+
+        hdr_row = QHBoxLayout()
+        hdr = QLabel("登録済みの教官一覧")
+        hdr.setStyleSheet("font-size:15px; font-weight:700;")
+        self.refresh_btn = QPushButton("🔄  更新")
+        self.refresh_btn.setFixedWidth(90)
+        self.refresh_btn.clicked.connect(self.load_tasks)
+        hdr_row.addWidget(hdr); hdr_row.addStretch(); hdr_row.addWidget(self.refresh_btn)
+        layout.addLayout(hdr_row)
+
         self.table = QTableWidget()
         self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["タスク名", "状態", "次回実行", "最終実行", "結果", "操作"])
-        self.table.setColumnWidth(0, 100)
-        self.table.setColumnWidth(1, 50)
-        self.table.setColumnWidth(2, 160)
-        self.table.setColumnWidth(3, 160)
-        self.table.setColumnWidth(4, 50)
-        self.table.setColumnWidth(5, 220)
+        self.table.setHorizontalHeaderLabels(["教官名","状態","次回実行","最終実行","結果","操作"])
+        self.table.setColumnWidth(0,150); self.table.setColumnWidth(1,70)
+        self.table.setColumnWidth(2,150); self.table.setColumnWidth(3,150)
+        self.table.setColumnWidth(4,70);  self.table.setColumnWidth(5,260)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().setVisible(False)
         layout.addWidget(self.table)
-
-        self.refresh_btn = QPushButton("更新")
-        layout.addWidget(self.refresh_btn)
-        self.refresh_btn.clicked.connect(self.load_tasks)
         self.load_tasks()
 
     @staticmethod
-    def _format_task_time(raw: str) -> str:
-        """
-        タスクスケジューラの日時文字列を整形する。
-        未実行時に返される 1999-11-30 はWindows の未実行デフォルト値なので
-        「未実行」と表示する。次回実行が過去日時の場合も考慮。
-        """
-        if not raw or raw.strip() == "":
-            return "－"
-        # 1999-11-30 はWindowsタスクスケジューラの「未実行」デフォルト値
-        if raw.startswith("1999-11-30"):
-            return "未実行"
-        # datetime文字列を見やすく整形（タイムゾーン部分を除去）
+    def _fmt(raw):
+        if not raw or raw.strip() == "": return "－"
+        if raw.startswith("1999-11-30"): return "未実行"
         try:
-            # "2025-06-01 09:00:00+09:00" → "2025-06-01 09:00"
-            dt_str = raw.split("+")[0].split(".")[0].strip()
-            from datetime import datetime as _dt
-            dt = _dt.fromisoformat(dt_str)
-            return dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return raw
+            s = raw.split("+")[0].split(".")[0].strip()
+            return datetime.fromisoformat(s).strftime("%Y-%m-%d %H:%M")
+        except: return raw
 
     def load_tasks(self):
-        tasks = get_simekiri_tasks()
         self.table.setRowCount(0)
-        for row, t in enumerate(tasks):
-            display_name = t["name"]
-            if t["name"].startswith(TASK_BASE_NAME + "_"):
-                deadline_id_part = t["name"][len(TASK_BASE_NAME)+1:]
-                cfg_path = get_task_config_path(deadline_id_part)
-                if os.path.exists(cfg_path):
+        for row, t in enumerate(get_simekiri_tasks()):
+            name = t["name"]
+            if name.startswith(TASK_BASE_NAME+"_"):
+                cp = get_task_config_path(name[len(TASK_BASE_NAME)+1:])
+                if os.path.exists(cp):
                     try:
-                        with open(cfg_path, "r", encoding="utf-8") as f:
-                            cfg = json.load(f)
-                            display_name = cfg.get("title", display_name)
-                    except Exception:
-                        pass
-
+                        with open(cp,"r",encoding="utf-8") as f:
+                            name = json.load(f).get("title",name)
+                    except: pass
             self.table.insertRow(row)
-            if not t["enabled"]:
-                status_text = "🔴無効"
-            elif t["state"] == 3:
-                status_text = "🟢有効"
-            else:
-                status_text = "⚪実行"
+            status = "🔴 無効" if not t["enabled"] else ("🟢 有効" if t["state"]==3 else "⚪ 実行中")
+            for col, val in enumerate([name, status,
+                    self._fmt(t["next_run"]), self._fmt(t["last_run"]),
+                    str(t["last_result"])]):
+                item = QTableWidgetItem(val)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table.setItem(row, col, item)
 
-            self.table.setItem(row, 0, QTableWidgetItem(display_name))
-            self.table.setItem(row, 1, QTableWidgetItem(status_text))
-            self.table.setItem(row, 2, QTableWidgetItem(self._format_task_time(t["next_run"])))
-            self.table.setItem(row, 3, QTableWidgetItem(self._format_task_time(t["last_run"])))
-            self.table.setItem(row, 4, QTableWidgetItem(str(t["last_result"])))
+            bw = QWidget(); bl = QHBoxLayout(bw)
+            bl.setContentsMargins(6,3,6,3); bl.setSpacing(6)
+            eb = QPushButton("編集"); eb.setFixedWidth(60)
+            db = QPushButton("削除"); db.setFixedWidth(60); db.setObjectName("btn_danger")
+            rb = QPushButton("▶ 今すぐ実行")
+            eb.clicked.connect(partial(self.edit_task,   t["name"]))
+            db.clicked.connect(partial(self.delete_task, t["name"]))
+            rb.clicked.connect(partial(self.run_task,    t["name"]))
+            for b in (eb, db, rb): bl.addWidget(b)
+            self.table.setCellWidget(row, 5, bw)
+        self.table.resizeRowsToContents()
 
-            btn_widget = QWidget()
-            btn_layout = QHBoxLayout(btn_widget)
-            btn_layout.setContentsMargins(0, 0, 0, 0)
-            edit_btn   = QPushButton("編集")
-            delete_btn = QPushButton("削除")
-            run_btn    = QPushButton("今すぐ実行")
-            edit_btn.clicked.connect(partial(self.edit_task, t["name"]))
-            delete_btn.clicked.connect(partial(self.delete_task, t["name"]))
-            run_btn.clicked.connect(partial(self.run_task, t["name"]))
-            btn_layout.addWidget(edit_btn)
-            btn_layout.addWidget(delete_btn)
-            btn_layout.addWidget(run_btn)
-            self.table.setCellWidget(row, 5, btn_widget)
-
-    def delete_task(self, task_name):
-        reply = QMessageBox.question(
-            self, "教官を削除", f"{task_name} を削除しますか？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+    def delete_task(self, tn):
+        if QMessageBox.question(self,"削除確認",f"「{tn}」を削除しますか？",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
-        deadline_id = task_name.replace(TASK_BASE_NAME + "_", "")
-        config_path = get_task_config_path(deadline_id)
+        did = tn.replace(TASK_BASE_NAME+"_",""); cp = get_task_config_path(did)
         if not is_admin():
-            script_path = os.path.abspath(__file__)
-            args = f'"{script_path}" --delete "{config_path}"'
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args, None, 1)
-            return
+            ctypes.windll.shell32.ShellExecuteW(
+                None,"runas",sys.executable,
+                f'"{os.path.abspath(__file__)}" --delete "{cp}"',None,1); return
         try:
             import win32com.client
-            service = win32com.client.Dispatch("Schedule.Service")
-            service.Connect()
-            root = service.GetFolder("\\")
-            root.DeleteTask(task_name, 0)
-            if os.path.exists(config_path):
-                os.remove(config_path)
-            QMessageBox.information(self, "削除完了", f"{task_name} を削除しました")
-        except Exception as e:
-            QMessageBox.warning(self, "削除失敗", f"削除に失敗しました:\n{e}")
+            s = win32com.client.Dispatch("Schedule.Service"); s.Connect()
+            s.GetFolder("\\").DeleteTask(tn,0)
+            if os.path.exists(cp): os.remove(cp)
+            QMessageBox.information(self,"削除完了","削除しました")
+        except Exception as e: QMessageBox.warning(self,"削除失敗",str(e))
         self.load_tasks()
 
-    def run_task(self, task_name):
-        """
-        タスクスケジューラ経由ではなく、config を直接読んで
-        simekiri_notify.run_notify() を呼び出す。
-        スケジュール期間外でも即時実行できる。
-        """
-        deadline_id = task_name.replace(TASK_BASE_NAME + "_", "")
-        config_path = get_task_config_path(deadline_id)
-
-        if not os.path.exists(config_path):
-            QMessageBox.warning(self, "実行失敗", "設定ファイルが見つかりません")
-            return
-
-        # 別スレッドで実行してGUIをブロックしない
+    def run_task(self, tn):
+        cp = get_task_config_path(tn.replace(TASK_BASE_NAME+"_",""))
+        if not os.path.exists(cp):
+            QMessageBox.warning(self,"エラー","設定ファイルが見つかりません"); return
         import threading
-
-        def _run():
+        def _r():
             try:
-                result = simekiri_notify.run_notify(config_path, test_mode=False)
-                # GUIスレッドへの通知はシグナルが理想だが、
-                # シンプルにメッセージボックスをメインスレッドから呼ぶ
-                from PyQt6.QtCore import QMetaObject, Qt as QtCore_Qt
-                if result == 0:
-                    QMetaObject.invokeMethod(
-                        self, "_show_run_success",
-                        QtCore_Qt.ConnectionType.QueuedConnection
-                    )
-                else:
-                    QMetaObject.invokeMethod(
-                        self, "_show_run_error",
-                        QtCore_Qt.ConnectionType.QueuedConnection
-                    )
+                res = simekiri_notify.run_notify(cp, test_mode=False)
+                msg = "通知を送信しました ✅" if res==0 else "エラーが発生しました。ログを確認してください。"
+                QTimer.singleShot(0, lambda: (
+                    QMessageBox.information(self,"完了",msg) if res==0
+                    else QMessageBox.warning(self,"エラー",msg)
+                ))
             except Exception as e:
-                print("run_task error:", e)
+                QTimer.singleShot(0, lambda: QMessageBox.warning(self,"エラー",str(e)))
+        threading.Thread(target=_r, daemon=True).start()
+        QMessageBox.information(self,"送信開始","送信中です…\n完了後に結果が表示されます。")
 
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        QMessageBox.information(self, "実行開始", "通知を送信しています…\n完了後にメッセージが表示されます。")
-
-    from PyQt6.QtCore import pyqtSlot
-
-    @pyqtSlot()
-    def _show_run_success(self):
-        QMessageBox.information(self, "実行完了", "通知を送信しました ✅")
-
-    @pyqtSlot()
-    def _show_run_error(self):
-        QMessageBox.warning(self, "実行失敗", "通知の送信中にエラーが発生しました。\nログを確認してください。")
-
-    def edit_task(self, task_name):
-        deadline_id = task_name.replace(TASK_BASE_NAME+"_", "")
-        config_path = get_task_config_path(deadline_id)
-        if not os.path.exists(config_path):
-            QMessageBox.warning(self, "エラー", "設定ファイルが見つかりません")
-            return
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
+    def edit_task(self, tn):
+        did = tn.replace(TASK_BASE_NAME+"_",""); cp = get_task_config_path(did)
+        if not os.path.exists(cp):
+            QMessageBox.warning(self,"エラー","設定ファイルが見つかりません"); return
+        with open(cp,"r",encoding="utf-8") as f: cfg = json.load(f)
         dlg = TaskEditDialog(cfg, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            with open(config_path, "r", encoding="utf-8") as f:
-                updated_cfg = json.load(f)
-            if hasattr(self, "main_app") and self.main_app:
-                self.main_app.update_task(updated_cfg)
-            QMessageBox.information(self, "保存完了", f"{updated_cfg.get('title','')} を更新しました")
+            with open(cp,"r",encoding="utf-8") as f: upd = json.load(f)
+            if self.main_app: self.main_app.update_task(upd)
+            QMessageBox.information(self,"保存完了",f"「{upd.get('title','')}」を更新しました")
             self.load_tasks()
 
 
@@ -872,270 +1121,188 @@ class TaskManagerWindow(QWidget):
 # タスク編集ダイアログ
 # ===================================================
 
-class TaskEditDialog(QDialog):
+class TaskEditDialog(GoogleAuthMixin, QDialog):
     def __init__(self, cfg, parent=None):
         super().__init__(parent)
         self.cfg = cfg
-        self.setWindowTitle(f"タスク設定編集: {cfg.get('title','')}")
-        self.resize(540, 640)
+        self.setWindowTitle(f"編集 – {cfg.get('title','')}")
+        self.resize(560, 720)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        inner = QWidget()
+        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.setStyleSheet(make_stylesheet(dark))
+
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        inner  = QWidget()
         layout = QVBoxLayout(inner)
-        scroll_area.setWidget(inner)
+        layout.setContentsMargins(20,16,20,24); layout.setSpacing(2)
+        scroll.setWidget(inner)
+        outer = QVBoxLayout(self); outer.setContentsMargins(0,0,0,0); outer.addWidget(scroll)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll_area)
-
-        # ---- データソース ----
-        layout.addWidget(QLabel("──────── データソース ────────"))
+        # データソース
+        layout.addWidget(section_header("データソース"))
+        layout.addLayout(field_row("読み込み元", "datasource"))
         self.source_combo = QComboBox()
-        self.source_combo.addItems(["Excel ファイル", "Google スプレッドシート"])
-        current_source = cfg.get("data_source", "excel")
-        self.source_combo.setCurrentIndex(1 if current_source == "sheets" else 0)
+        self.source_combo.addItems(["Excel ファイル","Google スプレッドシート"])
+        self.source_combo.setCurrentIndex(1 if cfg.get("data_source")=="sheets" else 0)
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         layout.addWidget(self.source_combo)
 
-        # Excel 欄
         self.excel_group = QWidget()
-        excel_vl = QVBoxLayout(self.excel_group)
-        excel_vl.setContentsMargins(0, 0, 0, 0)
-        excel_vl.addWidget(QLabel("Excelファイル"))
-        excel_hl = QHBoxLayout()
-        self.excel_input = QLineEdit(cfg.get("excel_path", ""))
-        browse_btn = QPushButton("参照")
-        browse_btn.clicked.connect(self.browse_excel)
-        excel_hl.addWidget(self.excel_input)
-        excel_hl.addWidget(browse_btn)
-        excel_vl.addLayout(excel_hl)
+        evl = QVBoxLayout(self.excel_group); evl.setContentsMargins(0,4,0,0); evl.setSpacing(4)
+        evl.addLayout(field_row("Excel ファイルのパス"))
+        ehl = QHBoxLayout(); ehl.setSpacing(6)
+        self.excel_input = QLineEdit(cfg.get("excel_path",""))
+        bb = QPushButton("参照"); bb.setFixedWidth(64); bb.clicked.connect(self.browse_excel)
+        ehl.addWidget(self.excel_input); ehl.addWidget(bb); evl.addLayout(ehl)
         layout.addWidget(self.excel_group)
 
-        # Sheets 欄
         self.sheets_group = QWidget()
-        sheets_vl = QVBoxLayout(self.sheets_group)
-        sheets_vl.setContentsMargins(0, 0, 0, 0)
-        sheets_vl.addWidget(QLabel("スプレッドシート URL"))
-        self.sheets_url_input = QLineEdit(cfg.get("sheets_url", ""))
-        sheets_vl.addWidget(self.sheets_url_input)
-        
-        # Google 認可ボタン＋状態表示
-        auth_hl = QHBoxLayout()
-        self.auth_btn = QPushButton("🔐 Google で認可する")
+        svl = QVBoxLayout(self.sheets_group); svl.setContentsMargins(0,4,0,0); svl.setSpacing(4)
+        svl.addLayout(field_row("スプレッドシート URL","google_auth"))
+        self.sheets_url_input = QLineEdit(cfg.get("sheets_url",""))
+        svl.addWidget(self.sheets_url_input)
+        ah = QHBoxLayout(); ah.setSpacing(10)
+        self.auth_btn = QPushButton("🔐  Google で認可する")
+        self.auth_btn.setObjectName("btn_primary")
         self.auth_btn.clicked.connect(self._authorize_google)
-        self.auth_status_label = QLabel("❌ 未認可")
-        auth_hl.addWidget(self.auth_btn)
-        auth_hl.addWidget(self.auth_status_label)
-        auth_hl.addStretch()
-        sheets_vl.addLayout(auth_hl)
-        
+        self.auth_status_label = QLabel()
+        ah.addWidget(self.auth_btn); ah.addWidget(self.auth_status_label); ah.addStretch()
+        svl.addLayout(ah)
         layout.addWidget(self.sheets_group)
         self._on_source_changed(self.source_combo.currentIndex())
-        self._update_auth_status_edit()
+        self._refresh_auth_label()
 
-        # ---- Webhook ----
-        layout.addWidget(QLabel("──────── 通知先 ────────"))
-        layout.addWidget(QLabel(
-            "Webhook URL（Discord / Slack / Teams / Chatwork / Google Chat）\n"
-            "画像送信対応：Discord・Teams・Google Chat"
-        ))
-        self.webhook_input = QLineEdit(cfg.get("webhook_url", ""))
+        # 通知先
+        layout.addWidget(section_header("通知先"))
+        layout.addLayout(field_row("Webhook URL","webhook"))
+        self.webhook_input = QLineEdit(cfg.get("webhook_url",""))
         layout.addWidget(self.webhook_input)
 
-        self.days_spin = QSpinBox()
-        self.days_spin.setRange(0, 60)
-        self.days_spin.setValue(cfg.get("days_before_deadline", 3))
-        layout.addWidget(QLabel("締切何日前に通知"))
+        layout.addLayout(field_row("締切何日前に通知","days_before"))
+        self.days_spin = QSpinBox(); self.days_spin.setRange(0,60)
+        self.days_spin.setValue(cfg.get("days_before_deadline",3))
+        self.days_spin.setFixedWidth(100)
         layout.addWidget(self.days_spin)
 
-        # ---- メンション ----
-        self.mention_checkbox = QCheckBox("メンションを有効（任意）")
-        self.mention_checkbox.setChecked(cfg.get("mention_enabled", False))
+        # メンション
+        layout.addLayout(field_row("担当者メンション","mention"))
+        self.mention_checkbox = QCheckBox("メンションを有効にする")
+        self.mention_checkbox.setChecked(cfg.get("mention_enabled",False))
         layout.addWidget(self.mention_checkbox)
-
         self.mention_box = QWidget()
         self.mention_layout = QVBoxLayout(self.mention_box)
-        self.mention_layout.setContentsMargins(0, 0, 0, 0)
-        mentions = cfg.get("mentions", [])
-        if mentions:
-            for m in mentions:
-                row = RowInput("担当名", "ユーザーID", self.mention_layout)
-                row.short.setText(m.get("name", ""))
-                row.long.setText(m.get("id", ""))
-                self.mention_layout.addWidget(row)
-        else:
-            self.mention_layout.addWidget(RowInput("担当名", "ユーザーID", self.mention_layout, deletable=False))
-        layout.addWidget(self.mention_box)
+        self.mention_layout.setContentsMargins(20,0,0,0); self.mention_layout.setSpacing(2)
+        for m in (cfg.get("mentions") or [{"name":"","id":""}]):
+            r = RowInput("担当名","ユーザーID",self.mention_layout, deletable=bool(cfg.get("mentions")))
+            r.short.setText(m.get("name","")); r.long.setText(m.get("id",""))
+            self.mention_layout.addWidget(r)
         for i in range(self.mention_layout.count()):
             w = self.mention_layout.itemAt(i).widget()
-            if isinstance(w, RowInput):
-                w.update_delete_state()
+            if isinstance(w,RowInput): w.update_delete_state()
+        layout.addWidget(self.mention_box)
 
-        # ---- 確認待ち通知先 ----
-        layout.addWidget(QLabel("──────── 確認待ち通知 ────────"))
-        self.reviewer_checkbox = QCheckBox("確認待ちタスクを別の人に通知する（任意）")
-        self.reviewer_checkbox.setChecked(cfg.get("reviewer_enabled", False))
+        # 確認待ち通知
+        layout.addWidget(section_header("確認待ち通知"))
+        layout.addLayout(field_row("レビュアーへの通知","reviewer"))
+        self.reviewer_checkbox = QCheckBox("確認待ちタスクを別の担当者に通知する")
+        self.reviewer_checkbox.setChecked(cfg.get("reviewer_enabled",False))
         self.reviewer_checkbox.stateChanged.connect(self._on_reviewer_toggled)
         layout.addWidget(self.reviewer_checkbox)
 
         self.reviewer_group = QWidget()
-        reviewer_vl = QVBoxLayout(self.reviewer_group)
-        reviewer_vl.setContentsMargins(20, 0, 0, 0)
-        reviewer_vl.addWidget(QLabel(
-            "レビュアー通知先 Webhook URL（省略可）\n"
-            "Discord/Slack/Teams/Chatwork/Google Chat 対応"
-        ))
-        self.reviewer_webhook_input = QLineEdit(cfg.get("reviewer_webhook_url", ""))
-        reviewer_vl.addWidget(self.reviewer_webhook_input)
-        reviewer_vl.addWidget(QLabel("レビュアーのメンション設定（担当名 → レビュアーID）"))
-        self.reviewer_mention_layout = QVBoxLayout()
-        reviewer_mentions = cfg.get("reviewer_mentions", [])
-        if reviewer_mentions:
-            for m in reviewer_mentions:
-                row = RowInput("担当名", "レビュアーID", self.reviewer_mention_layout)
-                row.short.setText(m.get("name", ""))
-                row.long.setText(m.get("id", ""))
-                self.reviewer_mention_layout.addWidget(row)
-        else:
-            self.reviewer_mention_layout.addWidget(
-                RowInput("担当名", "レビュアーID", self.reviewer_mention_layout, deletable=False)
-            )
-        reviewer_mention_box = QWidget()
-        reviewer_mention_box.setLayout(self.reviewer_mention_layout)
-        reviewer_vl.addWidget(reviewer_mention_box)
+        rvl = QVBoxLayout(self.reviewer_group); rvl.setContentsMargins(20,4,0,0); rvl.setSpacing(4)
+        rvl.addLayout(field_row("レビュアー Webhook URL（省略可）"))
+        self.reviewer_webhook_input = QLineEdit(cfg.get("reviewer_webhook_url",""))
+        rvl.addWidget(self.reviewer_webhook_input)
+        rvl.addLayout(field_row("レビュアーのメンション"))
+        self.reviewer_mention_layout = QVBoxLayout(); self.reviewer_mention_layout.setSpacing(2)
+        for m in (cfg.get("reviewer_mentions") or [{"name":"","id":""}]):
+            r = RowInput("担当名","レビュアーID",self.reviewer_mention_layout, deletable=bool(cfg.get("reviewer_mentions")))
+            r.short.setText(m.get("name","")); r.long.setText(m.get("id",""))
+            self.reviewer_mention_layout.addWidget(r)
+        rvm = QWidget(); rvm.setLayout(self.reviewer_mention_layout)
+        rvl.addWidget(rvm)
         layout.addWidget(self.reviewer_group)
-        self.reviewer_group.setVisible(cfg.get("reviewer_enabled", False))
+        self.reviewer_group.setVisible(cfg.get("reviewer_enabled",False))
 
-        # ---- 自動通知 ----
-        layout.addWidget(QLabel("──────── 自動連絡 ────────"))
-        self.auto_checkbox = QCheckBox("自動通知を有効（任意）")
-        self.auto_checkbox.setChecked(cfg.get("auto_notify", False))
+        # 自動連絡
+        layout.addWidget(section_header("自動連絡"))
+        layout.addLayout(field_row("タスクスケジューラ連携","auto_notify"))
+        self.auto_checkbox = QCheckBox("自動送信を有効にする")
+        self.auto_checkbox.setChecked(cfg.get("auto_notify",False))
         layout.addWidget(self.auto_checkbox)
 
-        self.time_edit = QTimeEdit(QTime.fromString(cfg.get("notify_time", "09:00"), "HH:mm"))
-        t_layout = QHBoxLayout()
-        t_layout.addWidget(QLabel("通知時刻"))
-        t_layout.addWidget(self.time_edit)
-        layout.addLayout(t_layout)
+        tl = QHBoxLayout(); tl.setSpacing(10)
+        tl.addWidget(QLabel("送信時刻"))
+        self.time_edit = QTimeEdit(QTime.fromString(cfg.get("notify_time","09:00"),"HH:mm"))
+        self.time_edit.setFixedWidth(100)
+        tl.addWidget(self.time_edit)
+        tl.addSpacing(20); tl.addWidget(QLabel("頻度（日おき）"))
+        self.interval_spin = QSpinBox(); self.interval_spin.setRange(1,30)
+        self.interval_spin.setValue(cfg.get("notify_interval_days",1))
+        self.interval_spin.setFixedWidth(80)
+        tl.addWidget(self.interval_spin); tl.addStretch()
+        layout.addLayout(tl)
 
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(1, 30)
-        self.interval_spin.setValue(cfg.get("notify_interval_days", 1))
-        i_layout = QHBoxLayout()
-        i_layout.addWidget(QLabel("通知頻度（日）"))
-        i_layout.addWidget(self.interval_spin)
-        layout.addLayout(i_layout)
-
-        # ---- 制作期間 ----
-        layout.addWidget(QLabel("制作期間"))
-        d_layout = QHBoxLayout()
-
-        start_str = cfg.get("start_date", QDate.currentDate().toString("yyyy-MM-dd"))
-        end_str   = cfg.get("end_date",   QDate.currentDate().addYears(1).toString("yyyy-MM-dd"))
-        try:
-            s_date = QDate.fromString(start_str, "yyyy-MM-dd")
-            e_date = QDate.fromString(end_str,   "yyyy-MM-dd")
-            if not s_date.isValid():
-                s_date = QDate.currentDate()
-            if not e_date.isValid():
-                e_date = QDate.currentDate().addYears(1)
-        except Exception:
-            s_date = QDate.currentDate()
-            e_date = QDate.currentDate().addYears(1)
-
-        self.start_date_edit = QDateEdit(s_date)
+        layout.addLayout(field_row("制作期間"))
+        dl = QHBoxLayout(); dl.setSpacing(8)
+        def pd(s, fb):
+            d = QDate.fromString(s,"yyyy-MM-dd"); return d if d.isValid() else fb
+        self.start_date_edit = QDateEdit(pd(cfg.get("start_date",""),QDate.currentDate()))
         self.start_date_edit.setCalendarPopup(True)
-        self.end_date_edit   = QDateEdit(e_date)
+        self.end_date_edit   = QDateEdit(pd(cfg.get("end_date",""),QDate.currentDate().addYears(1)))
         self.end_date_edit.setCalendarPopup(True)
+        dl.addWidget(QLabel("開始")); dl.addWidget(self.start_date_edit)
+        dl.addSpacing(8); dl.addWidget(QLabel("終了")); dl.addWidget(self.end_date_edit); dl.addStretch()
+        layout.addLayout(dl)
 
-        d_layout.addWidget(QLabel("開始日"))
-        d_layout.addWidget(self.start_date_edit)
-        d_layout.addWidget(QLabel("終了日"))
-        d_layout.addWidget(self.end_date_edit)
-        layout.addLayout(d_layout)
+        layout.addSpacing(16)
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine); layout.addWidget(sep)
+        layout.addSpacing(10)
+        sb = QPushButton("変更を保存する"); sb.setObjectName("btn_primary")
+        sb.clicked.connect(self.save); layout.addWidget(sb)
+        layout.addStretch()
 
-        save_btn = QPushButton("設定を保存")
-        save_btn.clicked.connect(self.save)
-        layout.addWidget(save_btn)
-
-    def _authorize_google(self):
-        """Google Sheets の認可フロー"""
-        def _callback(success, message):
-            QMessageBox.information(
-                self,
-                "Google Sheets 認可",
-                message
-            ) if success else QMessageBox.warning(self, "Google Sheets 認可", message)
-            if success:
-                self._update_auth_status_edit()
-
-        import threading
-        t = threading.Thread(
-            target=lambda: google_auth_helper.authorize_google_sheets(_callback),
-            daemon=True
-        )
-        t.start()
-
-    def _update_auth_status_edit(self):
-        """認可状態を表示"""
-        if google_auth_helper.has_token():
-            self.auth_status_label.setText("✅ 認可済み")
-            self.auth_btn.setEnabled(False)
-        else:
-            self.auth_status_label.setText("❌ 未認可")
-            self.auth_btn.setEnabled(True)
-
-    def _on_source_changed(self, index):
-        is_sheets = (index == 1)
-        self.excel_group.setVisible(not is_sheets)
-        self.sheets_group.setVisible(is_sheets)
+    def _on_source_changed(self, i):
+        self.excel_group.setVisible(i == 0); self.sheets_group.setVisible(i == 1)
 
     def _on_reviewer_toggled(self, state):
         self.reviewer_group.setVisible(state == Qt.CheckState.Checked.value)
 
     def browse_excel(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Excelを選択", "", "Excel (*.xlsx *.xls)")
-        if path:
-            self.excel_input.setText(path)
+        p, _ = QFileDialog.getOpenFileName(self,"Excel を選択","","Excel (*.xlsx *.xls)")
+        if p: self.excel_input.setText(p)
 
-    def browse_credentials(self):
-        path, _ = QFileDialog.getOpenFileName(self, "認証JSONを選択", "", "JSON (*.json)")
-        if path:
-            self.sheets_creds_input.setText(path)
-
-    def _collect_mentions(self, layout_widget) -> list:
-        mentions = []
-        for i in range(layout_widget.count()):
-            w = layout_widget.itemAt(i).widget()
-            if isinstance(w, RowInput):
-                short, long_ = w.get()
-                if short or long_:
-                    mentions.append({"name": short, "id": long_})
-        return mentions
+    def _collect_mentions(self, lyt):
+        res = []
+        for i in range(lyt.count()):
+            w = lyt.itemAt(i).widget()
+            if isinstance(w,RowInput):
+                s,l = w.get()
+                if s or l: res.append({"name":s,"id":l})
+        return res
 
     def save(self):
         is_sheets = (self.source_combo.currentIndex() == 1)
-        self.cfg["data_source"]              = "sheets" if is_sheets else "excel"
-        self.cfg["excel_path"]               = self.excel_input.text() if not is_sheets else ""
-        self.cfg["sheets_url"]               = self.sheets_url_input.text() if is_sheets else ""
-        self.cfg["webhook_url"]              = self.webhook_input.text()
-        self.cfg["days_before_deadline"]     = self.days_spin.value()
-        self.cfg["mention_enabled"]          = self.mention_checkbox.isChecked()
-        self.cfg["mentions"]                 = self._collect_mentions(self.mention_layout)
-        self.cfg["reviewer_enabled"]         = self.reviewer_checkbox.isChecked()
-        self.cfg["reviewer_webhook_url"]     = self.reviewer_webhook_input.text()
-        self.cfg["reviewer_mentions"]        = self._collect_mentions(self.reviewer_mention_layout)
-        self.cfg["auto_notify"]              = self.auto_checkbox.isChecked()
-        self.cfg["notify_time"]              = self.time_edit.time().toString("HH:mm")
-        self.cfg["notify_interval_days"]     = self.interval_spin.value()
-        self.cfg["start_date"]               = self.start_date_edit.date().toString("yyyy-MM-dd")
-        self.cfg["end_date"]                 = self.end_date_edit.date().toString("yyyy-MM-dd")
-
-        config_path = get_config_path(self.cfg["deadline_id"])
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(self.cfg, f, ensure_ascii=False, indent=2)
-
+        self.cfg.update({
+            "data_source":          "sheets" if is_sheets else "excel",
+            "excel_path":           self.excel_input.text() if not is_sheets else "",
+            "sheets_url":           self.sheets_url_input.text() if is_sheets else "",
+            "webhook_url":          self.webhook_input.text(),
+            "days_before_deadline": self.days_spin.value(),
+            "mention_enabled":      self.mention_checkbox.isChecked(),
+            "mentions":             self._collect_mentions(self.mention_layout),
+            "reviewer_enabled":     self.reviewer_checkbox.isChecked(),
+            "reviewer_webhook_url": self.reviewer_webhook_input.text(),
+            "reviewer_mentions":    self._collect_mentions(self.reviewer_mention_layout),
+            "auto_notify":          self.auto_checkbox.isChecked(),
+            "notify_time":          self.time_edit.time().toString("HH:mm"),
+            "notify_interval_days": self.interval_spin.value(),
+            "start_date":           self.start_date_edit.date().toString("yyyy-MM-dd"),
+            "end_date":             self.end_date_edit.date().toString("yyyy-MM-dd"),
+        })
+        with open(get_config_path(self.cfg["deadline_id"]),"w",encoding="utf-8") as f:
+            json.dump(self.cfg,f,ensure_ascii=False,indent=2)
         self.accept()
 
 
@@ -1146,46 +1313,26 @@ class TaskEditDialog(QDialog):
 if __name__ == "__main__":
     try:
         if "--notify" in sys.argv:
-            config_index = sys.argv.index("--notify") + 1
-            config_path  = sys.argv[config_index] if len(sys.argv) > config_index else None
-            sys.exit(simekiri_notify.run_notify(config_path))
+            idx = sys.argv.index("--notify") + 1
+            sys.exit(simekiri_notify.run_notify(sys.argv[idx] if len(sys.argv)>idx else None))
 
-        if ADMIN_FLAG in sys.argv or '--delete' in sys.argv:
-            config_path = None
-            if '--delete' in sys.argv:
-                idx = sys.argv.index('--delete') + 1
-                if len(sys.argv) > idx:
-                    config_path = sys.argv[idx]
-            else:
-                idx = sys.argv.index(ADMIN_FLAG) + 1
-                if len(sys.argv) > idx:
-                    config_path = sys.argv[idx]
-
-            if not config_path or not os.path.exists(config_path):
-                print("Config path missing")
-                sys.exit(1)
-
-            with open(config_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-
-            task_name = get_task_name(cfg["deadline_id"])
-
-            if '--delete' in sys.argv:
-                import win32com.client
-                service = win32com.client.Dispatch("Schedule.Service")
-                service.Connect()
-                root = service.GetFolder("\\")
-                try:
-                    root.DeleteTask(task_name, 0)
-                    print(f"削除成功: {task_name}")
-                except Exception as e:
-                    print("削除失敗:", e)
-                if os.path.exists(config_path):
-                    os.remove(config_path)
-                sys.exit(0)
+        if ADMIN_FLAG in sys.argv or "--delete" in sys.argv:
+            fl  = "--delete" if "--delete" in sys.argv else ADMIN_FLAG
+            idx = sys.argv.index(fl) + 1
+            cp  = sys.argv[idx] if len(sys.argv)>idx else None
+            if not cp or not os.path.exists(cp): print("Config missing"); sys.exit(1)
+            with open(cp,"r",encoding="utf-8") as f: cfg = json.load(f)
+            tn = get_task_name(cfg["deadline_id"])
+            import win32com.client
+            s = win32com.client.Dispatch("Schedule.Service"); s.Connect()
+            root = s.GetFolder("\\")
+            if fl == "--delete":
+                try: root.DeleteTask(tn,0); print(f"削除: {tn}")
+                except Exception as e: print("失敗:",e)
+                if os.path.exists(cp): os.remove(cp)
             else:
                 register_task_admin(cfg)
-                sys.exit(0)
+            sys.exit(0)
 
         app = QApplication(sys.argv)
         win = NotifierApp()
@@ -1193,5 +1340,5 @@ if __name__ == "__main__":
         sys.exit(app.exec())
 
     except Exception:
-        with open(ERROR_LOG, "w", encoding="utf-8") as f:
+        with open(ERROR_LOG,"w",encoding="utf-8") as f:
             f.write(traceback.format_exc())
