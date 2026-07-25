@@ -1,10 +1,9 @@
 #google_auth_helper.py
 
 import os
-import json
+import shutil
 import webbrowser
 import threading
-from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -67,10 +66,14 @@ def authorize_google_sheets(callback=None):
         auth_url, state = flow.authorization_url()
         
         # ローカルサーバーを起動してコールバックを受ける
+        _CallbackServer.flow = flow
+
         def run_server():
-            server = _CallbackServer(flow)
             try:
+                server = HTTPServer(("localhost", 8080), _CallbackServer)
+                server.timeout = 30
                 server.handle_request()
+                server.server_close()
             except Exception as e:
                 print(f"Callback server error: {e}")
 
@@ -167,3 +170,16 @@ def clear_token():
     """保存されたトークンを削除"""
     if os.path.exists(TOKEN_PATH):
         os.remove(TOKEN_PATH)
+
+
+def has_credentials():
+    """credentials.json が配置されているか確認"""
+    return os.path.exists(CREDENTIALS_PATH)
+
+
+def set_credentials_file(source_path):
+    """
+    ユーザーがファイル選択ダイアログ等で選んだ credentials.json を
+    アプリのデータフォルダにコピーして配置する。
+    """
+    shutil.copyfile(source_path, CREDENTIALS_PATH)

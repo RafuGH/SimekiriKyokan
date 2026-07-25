@@ -42,8 +42,16 @@ SimekiriKyokan/
 │   └─ SimekiriKyokan.iss
 │
 ├─ src/                      # Pythonソースコード
-│   ├─ simekiri_gui.py
-│   └─ simekiri_notify.py
+│   ├─ simekiri_gui.py        # メインGUI（エントリポイント）
+│   ├─ simekiri_notify.py     # 通知処理のオーケストレーション
+│   ├─ task_scheduler.py      # タスクスケジューラ／管理者権限まわり
+│   ├─ task_manager_window.py # タスク管理ウィンドウ
+│   ├─ task_edit_dialog.py    # タスク編集ダイアログ
+│   ├─ widgets.py             # 共通ウィジェット
+│   ├─ webhook_client.py      # Webhook送信（Discord/Slack/Teams等）
+│   ├─ task_image.py          # 作業リスト画像の生成
+│   ├─ data_loader.py         # Excel/Googleスプレッドシート読み込み
+│   └─ google_auth_helper.py  # Google OAuth連携
 │
 ├─ README.md
 └─ requirements.txt
