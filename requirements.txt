@@ -4,3 +4,6 @@ openpyxl
 pillow
 requests
 pywin32
+gspread
+google-auth
+google-auth-oauthlib
