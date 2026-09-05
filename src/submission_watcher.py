@@ -1,6 +1,6 @@
 #submission_watcher.py
 #
-# 提出フォルダ（OneDrive / SharePoint の同期フォルダなど）を監視し、
+# 提出フォルダ（OneDrive / SharePoint の同期フォルダ、または Google Drive のフォルダ）を監視し、
 # 新しく置かれた・更新されたファイルを検出して Webhook 通知する。
 #
 # OneDrive や Teams の「ファイル」タブは、PC上では通常のフォルダとして同期されるため、
@@ -103,6 +103,22 @@ def scan_folder(folder: str, recursive: bool = True, extensions=None) -> dict:
     return files
 
 
+def scan_drive_folder(folder_id: str) -> dict:
+    """
+    Google Drive のフォルダ直下のファイルを、ローカルスキャンと同じ
+    {ファイル名: {"mtime": float, "size": int}} 形式で返す。
+    """
+    import google_drive
+
+    files = {}
+    for f in google_drive.list_files_in_folder(folder_id):
+        name = f.get("name", "")
+        if not name or _is_ignored(name):
+            continue
+        files[name] = {"mtime": f.get("modified_epoch", 0.0), "size": f.get("size", 0)}
+    return files
+
+
 def detect_changes(previous: dict, current: dict):
     """前回と今回のスキャン結果を比較し、(新規, 更新) のファイル名リストを返す。"""
     new_files, updated_files = [], []
@@ -115,12 +131,12 @@ def detect_changes(previous: dict, current: dict):
     return sorted(new_files), sorted(updated_files)
 
 
-def build_message(folder: str, new_files: list, updated_files: list, mention: str = "") -> str:
+def build_message(folder_label: str, new_files: list, updated_files: list, mention: str = "") -> str:
     lines = []
     if mention:
         lines.append(mention)
     lines.append("📤 **提出フォルダに動きがありました**")
-    lines.append(f"📁 {os.path.basename(os.path.normpath(folder)) or folder}")
+    lines.append(f"📁 {folder_label}")
 
     for rel in new_files:
         lines.append(f"・🆕 {rel}")
@@ -147,17 +163,38 @@ def check_submissions(config: dict, log=print) -> dict:
     if not config.get("submission_watch_enabled"):
         return result
 
-    folder = config.get("submission_folder", "")
-    if not folder or not os.path.isdir(folder):
-        log(f"提出フォルダが見つかりません: {folder}")
-        return result
-
+    source = config.get("submission_source", "local")
     deadline_id = config.get("deadline_id", "default")
-    current = scan_folder(
-        folder,
-        recursive=config.get("submission_recursive", True),
-        extensions=config.get("submission_extensions", ""),
-    )
+
+    if source == "drive":
+        folder_id = config.get("submission_drive_folder_id", "")
+        if not folder_id:
+            log("Google Drive の提出フォルダが指定されていません")
+            return result
+        folder_label = config.get("submission_drive_folder_name", "") or folder_id
+        try:
+            current = scan_drive_folder(folder_id)
+        except Exception as e:
+            log(f"Google Drive の提出フォルダを読めませんでした: {e}")
+            return result
+        exts = parse_extensions(config.get("submission_extensions", ""))
+        if exts:
+            current = {
+                name: info for name, info in current.items()
+                if os.path.splitext(name)[1].lower() in exts
+            }
+    else:
+        folder = config.get("submission_folder", "")
+        if not folder or not os.path.isdir(folder):
+            log(f"提出フォルダが見つかりません: {folder}")
+            return result
+        folder_label = os.path.basename(os.path.normpath(folder)) or folder
+        current = scan_folder(
+            folder,
+            recursive=config.get("submission_recursive", True),
+            extensions=config.get("submission_extensions", ""),
+        )
+
     result["checked"] = True
 
     previous_state = load_state(deadline_id)
@@ -179,7 +216,7 @@ def check_submissions(config: dict, log=print) -> dict:
         log("提出通知先の Webhook URL がありません")
         return result
 
-    message = build_message(folder, new_files, updated_files)
+    message = build_message(folder_label, new_files, updated_files)
     try:
         response = send_webhook_text(webhook, message)
         status = getattr(response, "status_code", "N/A")
