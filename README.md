@@ -56,11 +56,52 @@ SimekiriKyokan/
 │   ├─ task_image.py          # 作業リスト画像の生成
 │   ├─ data_loader.py         # Excel/Googleスプレッドシート読み込み
 │   ├─ google_auth_helper.py  # Google OAuth連携
+│   ├─ app_settings.py        # アプリ設定（テーマ等）の保存
+│   ├─ submission_watcher.py  # 提出フォルダ監視→通知
+│   ├─ update_checker.py      # 起動時のアップデート確認
 │   └─ simekiri_2_1_run.bat   # 開発時のローカル起動用スクリプト
 │
 ├─ README.md
 └─ requirements.txt
 ```
+
+## ✨ 主な機能
+
+### 締切通知
+Excel / Google スプレッドシートの作業リストを読み取り、締切が近い作業を担当者ごとに
+Discord / Slack / Teams / Chatwork / Google Chat へ通知します（画像付き）。
+
+### 確認待ち通知
+進捗が「確認待ち」の作業を、担当者ではなくレビュアーに通知します。
+
+### 提出フォルダ監視
+OneDrive / Teams の同期フォルダなどを指定しておくと、そこに新しいファイルが
+提出された・更新されたときに通知します。
+
+- チェックのタイミングは、自動連絡のスケジュール実行時と「今すぐ実行」時です
+- 有効化直後の初回スキャンでは通知しません（既存ファイルの全件通知を防ぐため）
+- PCの起動状態に関わらず即時通知したい場合は、Power Automate の
+  「ファイルが作成されたとき」→「HTTP」で Webhook に POST するフローと併用できます
+
+### ライト / ダークテーマ
+既定はライトモードです。画面右上のボタンでいつでも切り替えでき、設定は保存されます。
+
+### アップデート告知
+起動時に GitHub の最新リリースを確認し、新しいバージョンがあればお知らせします。
+（通知は同じバージョンにつき1回だけです。ネットワークに繋がらない場合は何もしません）
+
+## 🚀 リリース手順（配布側）
+
+アップデート告知を機能させるには、次の手順でリリースしてください。
+
+1. `src/update_checker.py` の `APP_VERSION` を新しい番号に更新する（例: `"2.2"`）
+2. `installer/SimekiriKyokan.iss` の `AppVersion` と `OutputBaseFilename` も合わせる
+3. PyInstaller と Inno Setup でセットアップ exe をビルドする
+4. GitHub の Releases で **タグ `vX.Y`**（`APP_VERSION` と対応する形）を付けて公開し、
+   セットアップ exe を添付する
+
+利用者が次に締切教官を起動したとき、新しいバージョンが検知され、
+ダウンロードページへの案内が表示されます。
 
 ## 今後の予定
 - Googleスプレッドシート対応

@@ -1,6 +1,8 @@
 #simekiri_gui.py
 
 import sys, os, json, shutil, traceback
+import threading
+import webbrowser
 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QScrollArea,
@@ -8,12 +10,13 @@ from PyQt6.QtWidgets import (
     QSpinBox, QCheckBox, QDateEdit, QTimeEdit, QFileDialog, QMessageBox,
     QSizePolicy, QFrame,
 )
-from PyQt6.QtCore import QTime, QDate, Qt
-from PyQt6.QtGui import QPalette
+from PyQt6.QtCore import QTime, QDate, Qt, pyqtSignal
 
 import simekiri_notify
 import google_auth_helper
-from theme import make_stylesheet
+import app_settings
+import update_checker
+from theme import apply_theme
 from help_widgets import field_row, section_header
 from account_badge import AccountBadge
 from google_auth_mixin import GoogleAuthMixin
@@ -30,14 +33,17 @@ from task_manager_window import TaskManagerWindow
 # ===================================================
 
 class NotifierApp(GoogleAuthMixin, QWidget):
+    # アップデート確認はバックグラウンドスレッドで行うため、
+    # 結果はシグナル経由でGUIスレッドに渡す
+    update_found = pyqtSignal(dict)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("締切教官")
         self.setMinimumWidth(560)
         self.resize(580, 880)
 
-        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        self.setStyleSheet(make_stylesheet(dark))
+        apply_theme(self)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -49,12 +55,21 @@ class NotifierApp(GoogleAuthMixin, QWidget):
         tb_layout.setContentsMargins(16, 10, 12, 10)
         app_lbl = QLabel("締切教官")
         app_lbl.setStyleSheet("font-size:15px; font-weight:700; letter-spacing:0.5px;")
+        version_lbl = QLabel(f"v{update_checker.APP_VERSION}")
+        version_lbl.setObjectName("desc_lbl")
         self.manual_btn = QPushButton("📖 マニュアル")
         self.manual_btn.clicked.connect(self.open_manual)
+        self.theme_btn = QPushButton()
+        self.theme_btn.setFixedWidth(46)
+        self.theme_btn.setToolTip("ライト / ダークテーマを切り替え")
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        self._update_theme_btn()
         self.account_badge = AccountBadge()
         tb_layout.addWidget(app_lbl)
+        tb_layout.addWidget(version_lbl)
         tb_layout.addStretch()
         tb_layout.addWidget(self.manual_btn)
+        tb_layout.addWidget(self.theme_btn)
         tb_layout.addWidget(self.account_badge)
         root.addWidget(titlebar)
 
@@ -187,6 +202,38 @@ class NotifierApp(GoogleAuthMixin, QWidget):
         layout.addWidget(self.reviewer_group)
         self.reviewer_group.setVisible(False)
 
+        # ━━ 提出フォルダ監視 ━━
+        layout.addWidget(section_header("提出フォルダ監視"))
+        layout.addLayout(field_row("フォルダへの提出を通知（任意）", "submission"))
+        self.submission_checkbox = QCheckBox("提出フォルダを監視して通知する")
+        layout.addWidget(self.submission_checkbox)
+        self.submission_checkbox.stateChanged.connect(self._on_submission_toggled)
+
+        self.submission_group = QWidget()
+        subvl = QVBoxLayout(self.submission_group)
+        subvl.setContentsMargins(20, 4, 0, 0); subvl.setSpacing(4)
+        subvl.addLayout(field_row("監視するフォルダ"))
+        sub_hl = QHBoxLayout(); sub_hl.setSpacing(6)
+        self.submission_folder_input = QLineEdit()
+        self.submission_folder_input.setPlaceholderText("例：C:\\Users\\名前\\OneDrive - 会社名\\チーム\\提出")
+        btn_sub = QPushButton("参照"); btn_sub.setFixedWidth(64)
+        btn_sub.clicked.connect(self.browse_submission_folder)
+        sub_hl.addWidget(self.submission_folder_input); sub_hl.addWidget(btn_sub)
+        subvl.addLayout(sub_hl)
+        subvl.addLayout(field_row("対象の拡張子（省略可・カンマ区切り）"))
+        self.submission_ext_input = QLineEdit()
+        self.submission_ext_input.setPlaceholderText("例：.xlsx,.docx,.pdf（空欄ならすべて）")
+        subvl.addWidget(self.submission_ext_input)
+        subvl.addLayout(field_row("提出通知先 Webhook URL（省略可）"))
+        self.submission_webhook_input = QLineEdit()
+        self.submission_webhook_input.setPlaceholderText("省略すると上の URL を使用")
+        subvl.addWidget(self.submission_webhook_input)
+        self.submission_recursive_checkbox = QCheckBox("サブフォルダも対象にする")
+        self.submission_recursive_checkbox.setChecked(True)
+        subvl.addWidget(self.submission_recursive_checkbox)
+        layout.addWidget(self.submission_group)
+        self.submission_group.setVisible(False)
+
         # ━━ 自動連絡 ━━
         layout.addWidget(section_header("自動連絡"))
         layout.addLayout(field_row("タスクスケジューラ連携（任意）", "auto_notify"))
@@ -244,6 +291,56 @@ class NotifierApp(GoogleAuthMixin, QWidget):
         self.list_btn.clicked.connect(self.open_task_list)
         self.config = {}
 
+        self.update_found.connect(self._on_update_found)
+        self._start_update_check()
+
+    # ---- アップデート確認 ----
+    def _start_update_check(self):
+        """起動時に新しいリリースが無いかバックグラウンドで確認する。"""
+        if not app_settings.load_settings().get("check_update_on_launch", True):
+            return
+
+        def _check():
+            try:
+                release = update_checker.check_for_update()
+            except Exception:
+                return   # 確認できなくてもアプリの動作には影響させない
+            if not release:
+                return
+            # 同じバージョンを毎回告知しない
+            if release["version"] == app_settings.load_settings().get("last_notified_version"):
+                return
+            self.update_found.emit(release)
+
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _on_update_found(self, release: dict):
+        app_settings.save_settings({"last_notified_version": release.get("version", "")})
+        reply = QMessageBox.question(
+            self, "アップデートのお知らせ",
+            update_checker.format_message(release),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            webbrowser.open(release.get("url", update_checker.RELEASES_PAGE))
+
+    # ---- テーマ切り替え ----
+    def _update_theme_btn(self):
+        # 次に切り替わる先のアイコンを表示する
+        self.theme_btn.setText("☀" if app_settings.is_dark() else "🌙")
+
+    def _toggle_theme(self):
+        app_settings.set_theme("light" if app_settings.is_dark() else "dark")
+        apply_theme(self)
+        self._update_theme_btn()
+        # 開いている管理ウィンドウにも即座に反映する
+        win = getattr(self, "task_list_window", None)
+        if win is not None:
+            try:
+                apply_theme(win)
+            except RuntimeError:
+                pass   # 既に閉じられている場合
+
     # ---- Google 連携 ----
     def _choose_credentials_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "credentials.json を選択", "", "JSON (*.json)")
@@ -267,6 +364,14 @@ class NotifierApp(GoogleAuthMixin, QWidget):
         is_sheets = (index == 1)
         self.excel_group.setVisible(not is_sheets)
         self.sheets_group.setVisible(is_sheets)
+
+    def _on_submission_toggled(self, state):
+        self.submission_group.setVisible(state == Qt.CheckState.Checked.value)
+
+    def browse_submission_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "監視するフォルダを選択")
+        if path:
+            self.submission_folder_input.setText(path)
 
     def _on_reviewer_toggled(self, state):
         self.reviewer_group.setVisible(state == Qt.CheckState.Checked.value)
@@ -343,6 +448,15 @@ class NotifierApp(GoogleAuthMixin, QWidget):
             QMessageBox.warning(self, "入力エラー", "Webhook URLを入力してください")
             return
 
+        if self.submission_checkbox.isChecked():
+            folder = self.submission_folder_input.text().strip()
+            if not folder:
+                QMessageBox.warning(self, "入力エラー", "監視する提出フォルダを指定してください")
+                return
+            if not os.path.isdir(folder):
+                QMessageBox.warning(self, "入力エラー", f"提出フォルダが見つかりません:\n{folder}")
+                return
+
         category  = self.category_combo.currentText()
         end_date  = self.end_date.date().toString("yyyy-MM-dd")
         deadline_id = generate_deadline_id(category, end_date, title)
@@ -364,6 +478,12 @@ class NotifierApp(GoogleAuthMixin, QWidget):
             "reviewer_enabled":     self.reviewer_checkbox.isChecked(),
             "reviewer_webhook_url": self.reviewer_webhook_input.text(),
             "reviewer_mentions":    self._collect_mentions(self.reviewer_mention_layout),
+            # 提出フォルダ監視
+            "submission_watch_enabled": self.submission_checkbox.isChecked(),
+            "submission_folder":        self.submission_folder_input.text().strip(),
+            "submission_extensions":    self.submission_ext_input.text().strip(),
+            "submission_webhook_url":   self.submission_webhook_input.text().strip(),
+            "submission_recursive":     self.submission_recursive_checkbox.isChecked(),
             # 自動通知
             "auto_notify":          self.auto_checkbox.isChecked(),
             "notify_time":          self.time_edit.time().toString("HH:mm"),
@@ -404,11 +524,15 @@ class NotifierApp(GoogleAuthMixin, QWidget):
     def _reset_form(self):
         self.config = {}
         for w in (self.title_input, self.excel_input, self.sheets_url_input,
-                  self.webhook_input, self.reviewer_webhook_input):
+                  self.webhook_input, self.reviewer_webhook_input,
+                  self.submission_folder_input, self.submission_ext_input,
+                  self.submission_webhook_input):
             w.clear()
         self.days_spin.setValue(3)
         self.mention_checkbox.setChecked(False)
         self.reviewer_checkbox.setChecked(False)
+        self.submission_checkbox.setChecked(False)
+        self.submission_recursive_checkbox.setChecked(True)
         self.auto_checkbox.setChecked(False)
         self.time_edit.setTime(QTime(9, 0))
         self.interval_spin.setValue(1)
