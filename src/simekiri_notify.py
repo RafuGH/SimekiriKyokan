@@ -13,6 +13,7 @@ import pandas as pd
 from webhook_client import detect_webhook_type, build_mention, send_webhook_text, send_webhook_image
 from task_image import make_task_image, STYLE_MAP
 from data_loader import convert_deadline_value, load_dataframe_from_excel, load_dataframe_from_sheets
+import submission_watcher
 
 LOG_FILE = None
 
@@ -116,6 +117,12 @@ def run_notify(config_path=None, test_mode=False):
             return 1
 
     write_log("=== start run pid=" + str(os.getpid()) + " cwd=" + os.getcwd() + " ===")
+
+    # 提出フォルダの監視（有効な場合のみ）。ここで失敗しても締切通知は継続する。
+    try:
+        submission_watcher.check_submissions(config, log=write_log)
+    except Exception as e:
+        write_log(f"提出フォルダの確認に失敗しました: {e!r}")
 
     try:
         EXCEL_FILE  = config.get("excel_path", "")

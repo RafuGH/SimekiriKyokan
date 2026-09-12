@@ -3,9 +3,9 @@
 # 既存タスクの設定編集ダイアログ
 
 import json
+import os
 
 from PyQt6.QtCore import QTime, QDate, Qt
-from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import (
     QDialog, QScrollArea, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QComboBox, QCheckBox, QSpinBox, QTimeEdit, QDateEdit,
@@ -13,7 +13,9 @@ from PyQt6.QtWidgets import (
 )
 
 import google_auth_helper
-from theme import make_stylesheet
+import google_drive
+import drive_picker
+from theme import apply_theme
 from help_widgets import field_row, section_header
 from google_auth_mixin import GoogleAuthMixin
 from task_scheduler import get_config_path
@@ -27,8 +29,7 @@ class TaskEditDialog(GoogleAuthMixin, QDialog):
         self.setWindowTitle(f"編集 – {cfg.get('title','')}")
         self.resize(560, 720)
 
-        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        self.setStyleSheet(make_stylesheet(dark))
+        apply_theme(self)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -72,8 +73,14 @@ class TaskEditDialog(GoogleAuthMixin, QDialog):
         svl.setContentsMargins(0, 4, 0, 0)
         svl.setSpacing(4)
         svl.addLayout(field_row("スプレッドシート URL", "google_auth"))
+        sheet_hl = QHBoxLayout(); sheet_hl.setSpacing(6)
         self.sheets_url_input = QLineEdit(cfg.get("sheets_url", ""))
-        svl.addWidget(self.sheets_url_input)
+        self.pick_sheet_btn = QPushButton("📂 Drive から選択")
+        self.pick_sheet_btn.setFixedWidth(150)
+        self.pick_sheet_btn.clicked.connect(self.pick_spreadsheet_from_drive)
+        sheet_hl.addWidget(self.sheets_url_input)
+        sheet_hl.addWidget(self.pick_sheet_btn)
+        svl.addLayout(sheet_hl)
 
         # credentials.json 配置ボタン＋状態表示
         cred_hl = QHBoxLayout(); cred_hl.setSpacing(10)
@@ -167,6 +174,73 @@ class TaskEditDialog(GoogleAuthMixin, QDialog):
         layout.addWidget(self.reviewer_group)
         self.reviewer_group.setVisible(cfg.get("reviewer_enabled", False))
 
+        # ---- 提出フォルダ監視 ----
+        layout.addWidget(section_header("提出フォルダ監視"))
+        layout.addLayout(field_row("フォルダへの提出を通知", "submission"))
+        self.submission_checkbox = QCheckBox("提出フォルダを監視して通知する")
+        self.submission_checkbox.setChecked(cfg.get("submission_watch_enabled", False))
+        self.submission_checkbox.stateChanged.connect(self._on_submission_toggled)
+        layout.addWidget(self.submission_checkbox)
+
+        self.submission_group = QWidget()
+        subvl = QVBoxLayout(self.submission_group)
+        subvl.setContentsMargins(20, 4, 0, 0); subvl.setSpacing(4)
+
+        subvl.addLayout(field_row("監視する場所"))
+        self.submission_source_combo = QComboBox()
+        self.submission_source_combo.addItems(["ローカル / OneDrive の同期フォルダ", "Google Drive のフォルダ"])
+        self.submission_source_combo.setCurrentIndex(1 if cfg.get("submission_source") == "drive" else 0)
+        self.submission_source_combo.currentIndexChanged.connect(self._on_submission_source_changed)
+        subvl.addWidget(self.submission_source_combo)
+
+        # ローカルフォルダ
+        self.submission_local_group = QWidget()
+        local_vl = QVBoxLayout(self.submission_local_group)
+        local_vl.setContentsMargins(0, 0, 0, 0); local_vl.setSpacing(4)
+        local_vl.addLayout(field_row("監視するフォルダ"))
+        sub_hl = QHBoxLayout(); sub_hl.setSpacing(6)
+        self.submission_folder_input = QLineEdit(cfg.get("submission_folder", ""))
+        self.submission_folder_input.setPlaceholderText("例：C:\\Users\\名前\\OneDrive - 会社名\\チーム\\提出")
+        btn_sub = QPushButton("参照"); btn_sub.setFixedWidth(64)
+        btn_sub.clicked.connect(self.browse_submission_folder)
+        sub_hl.addWidget(self.submission_folder_input); sub_hl.addWidget(btn_sub)
+        local_vl.addLayout(sub_hl)
+        self.submission_recursive_checkbox = QCheckBox("サブフォルダも対象にする")
+        self.submission_recursive_checkbox.setChecked(cfg.get("submission_recursive", True))
+        local_vl.addWidget(self.submission_recursive_checkbox)
+        subvl.addWidget(self.submission_local_group)
+
+        # Google Drive フォルダ
+        self.submission_drive_group = QWidget()
+        drive_vl = QVBoxLayout(self.submission_drive_group)
+        drive_vl.setContentsMargins(0, 0, 0, 0); drive_vl.setSpacing(4)
+        drive_vl.addLayout(field_row("Google Drive のフォルダ"))
+        drive_hl = QHBoxLayout(); drive_hl.setSpacing(6)
+        drive_id = cfg.get("submission_drive_folder_id", "")
+        self.submission_drive_input = QLineEdit(
+            google_drive.FOLDER_URL.format(id=drive_id) if drive_id else ""
+        )
+        self.submission_drive_input.setPlaceholderText("フォルダURL、または「Drive から選択」")
+        self.pick_drive_folder_btn = QPushButton("📂 Drive から選択")
+        self.pick_drive_folder_btn.setFixedWidth(150)
+        self.pick_drive_folder_btn.clicked.connect(self.pick_submission_folder_from_drive)
+        drive_hl.addWidget(self.submission_drive_input)
+        drive_hl.addWidget(self.pick_drive_folder_btn)
+        drive_vl.addLayout(drive_hl)
+        subvl.addWidget(self.submission_drive_group)
+        self._submission_drive_folder_name = cfg.get("submission_drive_folder_name", "")
+        self._on_submission_source_changed(self.submission_source_combo.currentIndex())
+        subvl.addLayout(field_row("対象の拡張子（省略可・カンマ区切り）"))
+        self.submission_ext_input = QLineEdit(cfg.get("submission_extensions", ""))
+        self.submission_ext_input.setPlaceholderText("例：.xlsx,.docx,.pdf（空欄ならすべて）")
+        subvl.addWidget(self.submission_ext_input)
+        subvl.addLayout(field_row("提出通知先 Webhook URL（省略可）"))
+        self.submission_webhook_input = QLineEdit(cfg.get("submission_webhook_url", ""))
+        self.submission_webhook_input.setPlaceholderText("省略すると上の URL を使用")
+        subvl.addWidget(self.submission_webhook_input)
+        layout.addWidget(self.submission_group)
+        self.submission_group.setVisible(cfg.get("submission_watch_enabled", False))
+
         # ---- 自動通知 ----
         layout.addWidget(section_header("自動連絡"))
         layout.addLayout(field_row("タスクスケジューラ連携", "auto_notify"))
@@ -238,6 +312,30 @@ class TaskEditDialog(GoogleAuthMixin, QDialog):
         self.excel_group.setVisible(not is_sheets)
         self.sheets_group.setVisible(is_sheets)
 
+    def pick_spreadsheet_from_drive(self):
+        picked = drive_picker.pick_spreadsheet(self)
+        if picked:
+            self.sheets_url_input.setText(picked["url"])
+
+    def pick_submission_folder_from_drive(self):
+        picked = drive_picker.pick_folder(self)
+        if picked:
+            self.submission_drive_input.setText(picked["url"])
+            self._submission_drive_folder_name = picked.get("name", "")
+
+    def _on_submission_source_changed(self, index):
+        is_drive = (index == 1)
+        self.submission_local_group.setVisible(not is_drive)
+        self.submission_drive_group.setVisible(is_drive)
+
+    def _on_submission_toggled(self, state):
+        self.submission_group.setVisible(state == Qt.CheckState.Checked.value)
+
+    def browse_submission_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "監視するフォルダを選択")
+        if path:
+            self.submission_folder_input.setText(path)
+
     def _on_reviewer_toggled(self, state):
         self.reviewer_group.setVisible(state == Qt.CheckState.Checked.value)
 
@@ -270,6 +368,23 @@ class TaskEditDialog(GoogleAuthMixin, QDialog):
                 QMessageBox.warning(self, "入力エラー", "Excelファイルを指定してください")
                 return
 
+        if self.submission_checkbox.isChecked():
+            if self.submission_source_combo.currentIndex() == 1:
+                if not google_drive.extract_folder_id(self.submission_drive_input.text()):
+                    QMessageBox.warning(self, "入力エラー", "監視する Google Drive のフォルダを指定してください")
+                    return
+                if not google_auth_helper.has_token():
+                    QMessageBox.warning(self, "入力エラー", "Google Drive を使うには先に Google 認証を完了してください")
+                    return
+            else:
+                folder = self.submission_folder_input.text().strip()
+                if not folder:
+                    QMessageBox.warning(self, "入力エラー", "監視する提出フォルダを指定してください")
+                    return
+                if not os.path.isdir(folder):
+                    QMessageBox.warning(self, "入力エラー", f"提出フォルダが見つかりません:\n{folder}")
+                    return
+
         self.cfg.update({
             "data_source":          "sheets" if is_sheets else "excel",
             "excel_path":           self.excel_input.text() if not is_sheets else "",
@@ -281,6 +396,14 @@ class TaskEditDialog(GoogleAuthMixin, QDialog):
             "reviewer_enabled":     self.reviewer_checkbox.isChecked(),
             "reviewer_webhook_url": self.reviewer_webhook_input.text(),
             "reviewer_mentions":    self._collect_mentions(self.reviewer_mention_layout),
+            "submission_watch_enabled": self.submission_checkbox.isChecked(),
+            "submission_source":        "drive" if self.submission_source_combo.currentIndex() == 1 else "local",
+            "submission_folder":        self.submission_folder_input.text().strip(),
+            "submission_drive_folder_id":   google_drive.extract_folder_id(self.submission_drive_input.text()),
+            "submission_drive_folder_name": self._submission_drive_folder_name,
+            "submission_extensions":    self.submission_ext_input.text().strip(),
+            "submission_webhook_url":   self.submission_webhook_input.text().strip(),
+            "submission_recursive":     self.submission_recursive_checkbox.isChecked(),
             "auto_notify":          self.auto_checkbox.isChecked(),
             "notify_time":          self.time_edit.time().toString("HH:mm"),
             "notify_interval_days": self.interval_spin.value(),

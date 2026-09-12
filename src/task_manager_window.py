@@ -9,14 +9,13 @@ from datetime import datetime
 from functools import partial
 
 from PyQt6.QtCore import QMetaObject, Qt, pyqtSlot
-from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
     QPushButton, QMessageBox, QDialog,
 )
 
 import simekiri_notify
-from theme import make_stylesheet
+from theme import apply_theme
 from task_scheduler import (
     TASK_BASE_NAME, get_config_path, get_simekiri_tasks, is_admin, relaunch_as_admin,
 )
@@ -30,8 +29,7 @@ class TaskManagerWindow(QWidget):
         self.setWindowTitle("締切教官 – 管理")
         self.resize(900, 460)
 
-        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        self.setStyleSheet(make_stylesheet(dark))
+        apply_theme(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 20)
