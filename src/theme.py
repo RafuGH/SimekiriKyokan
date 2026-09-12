@@ -100,10 +100,10 @@ QLabel {{ color: {txt}; background: transparent; }}
 QLineEdit, QSpinBox, QComboBox, QTimeEdit, QDateEdit {{
     background: {surf};
     border: 1px solid {brd};
-    border-radius: 4px;
-    padding: 5px 10px;
+    border-radius: 6px;
+    padding: 7px 12px;
     color: {txt};
-    min-height: 30px;
+    min-height: 32px;
     selection-background-color: {acc};
 }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus,
@@ -124,8 +124,8 @@ QPushButton#btn_primary {{
     background-color: {acc};
     color: {"#000000" if dark else "#ffffff"};
     border: none;
-    border-radius: 4px;
-    padding: 7px 20px;
+    border-radius: 6px;
+    padding: 8px 22px;
     font-weight: 600;
     min-height: 32px;
 }}
@@ -138,8 +138,8 @@ QPushButton {{
     background-color: {surf};
     color: {txt};
     border: 1px solid {brd};
-    border-radius: 4px;
-    padding: 6px 16px;
+    border-radius: 6px;
+    padding: 7px 18px;
     min-height: 32px;
 }}
 QPushButton:hover  {{ background-color: {surf2}; border-color: {txt2}; }}
@@ -229,3 +229,15 @@ QTextBrowser {{
 /* ── セパレータ ── */
 QFrame[frameShape="4"] {{ color: {brd}; }}
 """
+
+
+def apply_theme(widget, dark: bool = None):
+    """
+    保存されているテーマ設定（既定はライト）を widget に適用する。
+    dark を明示した場合はその値を優先する。
+    """
+    import app_settings
+    if dark is None:
+        dark = app_settings.is_dark()
+    widget.setStyleSheet(make_stylesheet(dark))
+    return dark
