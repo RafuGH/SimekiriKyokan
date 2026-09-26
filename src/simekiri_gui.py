@@ -19,7 +19,7 @@ import update_checker
 import drive_picker
 import google_drive
 from theme import apply_theme
-from help_widgets import field_row, section_header
+from help_widgets import field_row, section_header, HelpDialog, manual_pdf_path, manual_page_path
 from account_badge import AccountBadge
 from google_auth_mixin import GoogleAuthMixin
 from task_scheduler import (
@@ -526,15 +526,17 @@ class NotifierApp(GoogleAuthMixin, QWidget):
             self.excel_input.setText(p)
 
     def open_manual(self):
-        try:
-            base_dir = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
-            pdf_path = os.path.join(base_dir, "SimekiriKyokan_Manual.pdf")
-            if os.path.exists(pdf_path):
+        pdf_path = manual_pdf_path()
+        if pdf_path:
+            try:
                 os.startfile(pdf_path)
-            else:
-                QMessageBox.warning(self, "エラー", "マニュアルPDFが見つかりません")
-        except Exception as e:
-            QMessageBox.warning(self, "エラー", f"マニュアルを開けませんでした:\n{e}")
+                return
+            except Exception:
+                pass   # PDFを開けない環境ではアプリ内で表示する
+        if manual_page_path(1):
+            HelpDialog("説明書", parent=self, page=1).exec()
+        else:
+            QMessageBox.warning(self, "エラー", "マニュアルが見つかりません")
 
     def generate_excel(self):
         base_dir = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))

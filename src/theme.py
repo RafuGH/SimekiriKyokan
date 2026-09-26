@@ -145,6 +145,7 @@ QPushButton {{
 QPushButton:hover  {{ background-color: {surf2}; border-color: {txt2}; }}
 QPushButton:pressed {{ background-color: {brd}; }}
 QPushButton:disabled {{ color: {txt2}; }}
+QPushButton#btn_icon {{ padding: 0; }}
 
 /* ── 危険ボタン ── */
 QPushButton#btn_danger {{

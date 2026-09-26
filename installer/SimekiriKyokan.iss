@@ -28,6 +28,8 @@ Source: "assets\Tasks.xlsx"; DestDir: "{app}"; Flags: ignoreversion
 
 Source: "assets\SimekiriKyokan_Manual.pdf"; DestDir: "{app}"; Flags: ignoreversion
 
+Source: "assets\manual\*.png"; DestDir: "{app}\manual"; Flags: ignoreversion
+
 Source: "assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

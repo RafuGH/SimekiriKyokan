@@ -27,7 +27,7 @@ class TaskManagerWindow(QWidget):
         super().__init__()
         self.main_app = main_app
         self.setWindowTitle("締切教官 – 管理")
-        self.resize(900, 460)
+        self.resize(970, 460)
 
         apply_theme(self)
 
@@ -54,7 +54,7 @@ class TaskManagerWindow(QWidget):
         self.table.setColumnWidth(2, 150)
         self.table.setColumnWidth(3, 150)
         self.table.setColumnWidth(4, 70)
-        self.table.setColumnWidth(5, 260)
+        self.table.setColumnWidth(5, 330)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
@@ -129,7 +129,8 @@ class TaskManagerWindow(QWidget):
             btn_layout.addWidget(delete_btn)
             btn_layout.addWidget(run_btn)
             self.table.setCellWidget(row, 5, btn_widget)
-        self.table.resizeRowsToContents()
+            # 操作ボタンが切れないよう、スタイルシートのセル余白（上下6px）込みで行の高さを取る
+            self.table.setRowHeight(row, btn_widget.sizeHint().height() + 12)
 
     def delete_task(self, task_name):
         reply = QMessageBox.question(
