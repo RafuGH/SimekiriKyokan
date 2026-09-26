@@ -127,6 +127,10 @@ Google スプレッドシートを使う場合、URLを貼り付けなくても
    exe を添付する（ファイル名に `Setup` を含めているため自動更新の対象として
    確実に選択されます）
 
+タグを push する代わりに、GitHub の Actions 画面で「Build and Release」を
+Run workflow（バージョンとリリースノートを入力）しても同じようにリリースできます。
+リリースノートは、アップデートのお知らせにそのまま表示されます。
+
 手動でビルド・公開する場合は、3〜4の代わりに PyInstaller と Inno Setup で
 セットアップ exe をビルドし、GitHub の Releases でタグを付けて exe を添付してください。
 
