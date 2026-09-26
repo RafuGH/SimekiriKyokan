@@ -107,17 +107,26 @@ Google スプレッドシートを使う場合、URLを貼り付けなくても
 
 ## 🚀 リリース手順（配布側）
 
-アップデート告知を機能させるには、次の手順でリリースしてください。
+`.github/workflows/release.yml` により、タグを push するだけで
+ビルドとリリース公開が自動化されています。
 
-1. `src/update_checker.py` の `APP_VERSION` を新しい番号に更新する（例: `"2.2"`）
+1. `src/update_checker.py` の `APP_VERSION` を新しい番号に更新する（例: `"3.0"`）
 2. `installer/SimekiriKyokan.iss` の `AppVersion` と `OutputBaseFilename` も合わせる
-3. PyInstaller と Inno Setup でセットアップ exe をビルドする
-4. GitHub の Releases で **タグ `vX.Y`**（`APP_VERSION` と対応する形）を付けて公開し、
-   **セットアップ exe を添付する**（添付が自動更新の条件です。ファイル名に
-   `Setup` を含めておくと確実に選択されます）
+3. コミットして **タグ `vX.Y`**（`APP_VERSION` と対応する形）を付けて push する
+   ```bash
+   git tag v3.0
+   git push origin v3.0
+   ```
+4. GitHub Actions が Windows ランナー上で PyInstaller → Inno Setup の順に
+   セットアップ exe をビルドし、そのタグの GitHub Release を自動作成して
+   exe を添付する（ファイル名に `Setup` を含めているため自動更新の対象として
+   確実に選択されます）
+
+手動でビルド・公開する場合は、3〜4の代わりに PyInstaller と Inno Setup で
+セットアップ exe をビルドし、GitHub の Releases でタグを付けて exe を添付してください。
 
 利用者が次に締切教官を起動したとき、新しいバージョンが検知され、
-ダウンロードページへの案内が表示されます。
+自動でダウンロード・インストーラー起動が行われます。
 
 ## 今後の予定
 - Googleスプレッドシート対応
