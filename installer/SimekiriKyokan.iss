@@ -6,6 +6,7 @@ AppPublisher=Rafu
 DefaultDirName={autopf}\SimekiriKyokan
 DefaultGroupName=締切教官
 OutputBaseFilename=SimekiriKyokan_Setup_v3.0
+OutputDir={#SourcePath}Output
 SourceDir=..
 Compression=lzma2
 SolidCompression=yes
