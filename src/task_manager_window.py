@@ -6,7 +6,6 @@ import json
 import os
 import threading
 from datetime import datetime
-from functools import partial
 
 from PyQt6.QtCore import QMetaObject, Qt, pyqtSlot
 from PyQt6.QtWidgets import (
@@ -40,7 +39,7 @@ class TaskManagerWindow(QWidget):
         hdr.setStyleSheet("font-size:15px; font-weight:700;")
         self.refresh_btn = QPushButton("🔄  更新")
         self.refresh_btn.setFixedWidth(90)
-        self.refresh_btn.clicked.connect(self.load_tasks)
+        self.refresh_btn.clicked.connect(lambda _=False: self.load_tasks())
         hdr_row.addWidget(hdr)
         hdr_row.addStretch()
         hdr_row.addWidget(self.refresh_btn)
@@ -82,7 +81,23 @@ class TaskManagerWindow(QWidget):
 
     def load_tasks(self):
         self.table.setRowCount(0)
-        for row, t in enumerate(get_simekiri_tasks()):
+        try:
+            tasks = get_simekiri_tasks()
+        except Exception as e:
+            # PyQt6 はスロット内の未処理例外でアプリごと落ちるため、ここで握りつぶして表示する
+            QMessageBox.warning(self, "タスク取得失敗", f"タスクスケジューラの読み込みに失敗しました:\n{e}")
+            return
+        for row, t in enumerate(tasks):
+            try:
+                self._add_task_row(row, t)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.table.setRowCount(row)
+                QMessageBox.warning(self, "表示エラー", f"「{t.get('name', '')}」の表示に失敗しました:\n{e}")
+
+    def _add_task_row(self, row, t):
+        if True:
             display_name = t["name"]
             if t["name"].startswith(TASK_BASE_NAME + "_"):
                 deadline_id_part = t["name"][len(TASK_BASE_NAME)+1:]
@@ -122,9 +137,9 @@ class TaskManagerWindow(QWidget):
             delete_btn.setFixedWidth(60)
             delete_btn.setObjectName("btn_danger")
             run_btn    = QPushButton("▶ 今すぐ実行")
-            edit_btn.clicked.connect(partial(self.edit_task, t["name"]))
-            delete_btn.clicked.connect(partial(self.delete_task, t["name"]))
-            run_btn.clicked.connect(partial(self.run_task, t["name"]))
+            edit_btn.clicked.connect(lambda _=False, n=t["name"]: self.edit_task(n))
+            delete_btn.clicked.connect(lambda _=False, n=t["name"]: self.delete_task(n))
+            run_btn.clicked.connect(lambda _=False, n=t["name"]: self.run_task(n))
             btn_layout.addWidget(edit_btn)
             btn_layout.addWidget(delete_btn)
             btn_layout.addWidget(run_btn)

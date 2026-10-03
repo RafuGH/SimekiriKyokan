@@ -81,7 +81,11 @@ def _list(query: str, limit: int = 200, fields: str = "files(id,name,modifiedTim
             if not page_token or len(items) >= limit:
                 break
     except Exception as e:
-        raise DriveError(f"Google Drive の一覧取得に失敗しました:\n{e}")
+        hint = ""
+        if any(k in str(e) for k in ("403", "nsufficient", "accessNotConfigured", "has not been used")):
+            hint = ("\n\n【対処】Google Cloud Console で「Google Drive API」を有効にし、"
+                    "一度認可を解除してから再度「Google で認可する」を行ってください。")
+        raise DriveError(f"Google Drive の一覧取得に失敗しました:\n{e}{hint}")
     return items
 
 

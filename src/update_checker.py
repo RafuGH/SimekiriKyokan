@@ -15,7 +15,7 @@ import tempfile
 import requests
 
 # このビルドのバージョン。リリースのタグ名（vX.Y）と対応させる。
-APP_VERSION = "3.1"
+APP_VERSION = "3.2"
 
 REPO = "RafuGH/SimekiriKyokan"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases/latest"

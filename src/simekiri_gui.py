@@ -19,7 +19,7 @@ import update_checker
 import drive_picker
 import google_drive
 from theme import apply_theme
-from help_widgets import field_row, section_header, HelpDialog, manual_pdf_path, manual_page_path
+from help_widgets import field_row, section_header, HelpDialog, manual_page_path
 from account_badge import AccountBadge
 from google_auth_mixin import GoogleAuthMixin
 from task_scheduler import (
@@ -526,13 +526,6 @@ class NotifierApp(GoogleAuthMixin, QWidget):
             self.excel_input.setText(p)
 
     def open_manual(self):
-        pdf_path = manual_pdf_path()
-        if pdf_path:
-            try:
-                os.startfile(pdf_path)
-                return
-            except Exception:
-                pass   # PDFを開けない環境ではアプリ内で表示する
         if manual_page_path(1):
             HelpDialog("説明書", parent=self, page=1).exec()
         else:
@@ -714,8 +707,11 @@ class NotifierApp(GoogleAuthMixin, QWidget):
         simekiri_notify.run_notify(config_path, test_mode=True)
 
     def open_task_list(self):
-        self.task_list_window = TaskManagerWindow(self)
-        self.task_list_window.show()
+        try:
+            self.task_list_window = TaskManagerWindow(self)
+            self.task_list_window.show()
+        except Exception as e:
+            QMessageBox.warning(self, "管理画面を開けません", f"{e}")
 
     def update_task(self, cfg):
         """
@@ -788,6 +784,16 @@ if __name__ == "__main__":
             _run_admin_task_cli(config_path, delete=False)
 
         else:
+            def _excepthook(exc_type, exc, tb):
+                # スロット内の未処理例外で PyQt6 が abort しないよう、記録して通知する
+                text = "".join(traceback.format_exception(exc_type, exc, tb))
+                try:
+                    with open(ERROR_LOG, "a", encoding="utf-8") as f:
+                        f.write(text + "\n")
+                    QMessageBox.warning(None, "エラー", f"予期しないエラーが発生しました:\n{exc}\n\n詳細: {ERROR_LOG}")
+                except Exception:
+                    pass
+            sys.excepthook = _excepthook
             app = QApplication(sys.argv)
             win = NotifierApp()
             win.show()
