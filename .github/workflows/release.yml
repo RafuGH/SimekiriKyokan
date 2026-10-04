@@ -54,7 +54,7 @@ jobs:
         run: pyinstaller src/simekiri_gui.py --name simekiri_gui --icon assets/icon.ico --noconfirm --clean --windowed `
           --collect-data googleapiclient --collect-submodules googleapiclient `
           --collect-submodules google_auth_oauthlib `
-          --hidden-import win32com.client --hidden-import pythoncom --hidden-import pywintypes
+          --hidden-import win32com.client --hidden-import pythoncom --hidden-import pywintypes --hidden-import win32timezone
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
