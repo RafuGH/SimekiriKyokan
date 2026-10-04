@@ -1,11 +1,11 @@
 [Setup]
 AppId={{8F6A3D52-9E21-4C1E-ABCD-1234567890AB}}
 AppName=締切教官 (SimekiriKyokan)
-AppVersion=3.2
+AppVersion=3.3
 AppPublisher=Rafu
 DefaultDirName={autopf}\SimekiriKyokan
 DefaultGroupName=締切教官
-OutputBaseFilename=SimekiriKyokan_Setup_v3.2
+OutputBaseFilename=SimekiriKyokan_Setup_v3.3
 OutputDir={#SourcePath}Output
 SourceDir=..
 Compression=lzma2
