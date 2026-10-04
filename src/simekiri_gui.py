@@ -1,6 +1,6 @@
 #simekiri_gui.py
 
-import sys, os, json, shutil, traceback
+import sys, os, json, shutil, traceback, ctypes
 import threading
 import webbrowser
 
@@ -24,7 +24,7 @@ from account_badge import AccountBadge
 from google_auth_mixin import GoogleAuthMixin
 from task_scheduler import (
     APP_DIR, is_admin, get_config_path, get_task_name, generate_deadline_id,
-    register_task_admin, relaunch_as_admin, ADMIN_FLAG,
+    register_task_admin, relaunch_as_admin, ADMIN_FLAG, check_schedule_dates,
 )
 from widgets import RowInput
 from task_manager_window import TaskManagerWindow
@@ -604,6 +604,12 @@ class NotifierApp(GoogleAuthMixin, QWidget):
                     QMessageBox.warning(self, "入力エラー", f"提出フォルダが見つかりません:\n{folder}")
                     return
 
+        if self.auto_checkbox.isChecked():
+            err = check_schedule_dates(self.start_date.date().toPyDate(), self.end_date.date().toPyDate())
+            if err:
+                QMessageBox.warning(self, "入力エラー", err)
+                return
+
         category  = self.category_combo.currentText()
         end_date  = self.end_date.date().toString("yyyy-MM-dd")
         deadline_id = generate_deadline_id(category, end_date, title)
@@ -761,7 +767,12 @@ def _run_admin_task_cli(config_path, delete=False):
             os.remove(config_path)
         sys.exit(0)
     else:
-        register_task_admin(cfg)
+        try:
+            register_task_admin(cfg)
+        except Exception as e:
+            # 管理者権限で再起動したプロセスにはコンソールが無いので、ダイアログで知らせる
+            ctypes.windll.user32.MessageBoxW(0, f"タスクの登録に失敗しました。\n\n{e}", "締切教官", 0x10)
+            sys.exit(1)
         sys.exit(0)
 
 

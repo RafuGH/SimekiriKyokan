@@ -18,7 +18,7 @@ import drive_picker
 from theme import apply_theme
 from help_widgets import field_row, section_header
 from google_auth_mixin import GoogleAuthMixin
-from task_scheduler import get_config_path
+from task_scheduler import get_config_path, check_schedule_dates
 from widgets import RowInput
 
 
@@ -384,6 +384,12 @@ class TaskEditDialog(GoogleAuthMixin, QDialog):
                 if not os.path.isdir(folder):
                     QMessageBox.warning(self, "入力エラー", f"提出フォルダが見つかりません:\n{folder}")
                     return
+
+        if self.auto_checkbox.isChecked():
+            err = check_schedule_dates(self.start_date_edit.date().toPyDate(), self.end_date_edit.date().toPyDate())
+            if err:
+                QMessageBox.warning(self, "入力エラー", err)
+                return
 
         self.cfg.update({
             "data_source":          "sheets" if is_sheets else "excel",

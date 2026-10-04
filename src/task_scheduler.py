@@ -39,6 +39,18 @@ def generate_deadline_id(category, end_date_str, title):
     return f"{category}_{safe_title}_{uid}"
 
 
+def check_schedule_dates(start, end):
+    """
+    自動通知の期間（datetime.date）を検証し、問題があればその文面を返す（問題なしは None）。
+    終了日が過去だと、タスクスケジューラが EndBoundary エラーで登録を拒否する。
+    """
+    if end < datetime.now().date():
+        return "終了日が過去の日付になっています。今日以降の日付を指定してください。"
+    if end < start:
+        return "終了日が開始日より前になっています。"
+    return None
+
+
 def relaunch_as_admin(config_path, extra_flag=ADMIN_FLAG):
     """管理者権限で自身を再起動し、タスク登録/削除を行わせる。"""
     if getattr(sys, 'frozen', False):
