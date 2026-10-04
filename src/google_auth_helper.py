@@ -1,5 +1,6 @@
 #google_auth_helper.py
 
+import json
 import os
 import shutil
 import webbrowser
@@ -14,6 +15,9 @@ SCOPES = [
 ]
 
 # アプリデータディレクトリ
+# 同意画面で一部のスコープだけ許可された場合でも例外にせず、不足は missing_scopes() で検出する
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+
 APP_DIR = os.path.join(os.environ["LOCALAPPDATA"], "SimekiriKyokan")
 os.makedirs(APP_DIR, exist_ok=True)
 
@@ -104,7 +108,13 @@ def authorize_google_sheets(callback=None):
                 flow.fetch_token(code=result["code"])
                 with open(TOKEN_PATH, "w") as f:
                     f.write(flow.credentials.to_json())
-                if callback:
+                lacking = missing_scopes()
+                if lacking and callback:
+                    callback(False,
+                             "⚠ 認可は完了しましたが、一部の権限が許可されていません。\n"
+                             "Google の許可画面で、すべての項目（スプレッドシート／ドライブ）に"
+                             "チェックを入れて、もう一度認可してください。")
+                elif callback:
                     callback(True, "✅ Google Sheets の認可が完了しました！\n次回から自動でログインされます。")
             else:
                 if callback:
@@ -116,6 +126,16 @@ def authorize_google_sheets(callback=None):
 
     # 完全に別スレッドで実行（GUI をブロックしない）
     threading.Thread(target=_run, daemon=True).start()
+
+
+def missing_scopes():
+    """保存済みトークンに付与されていない必須スコープの一覧を返す（トークンが無ければ全て）。"""
+    try:
+        with open(TOKEN_PATH, "r", encoding="utf-8") as f:
+            granted = set(json.load(f).get("scopes") or [])
+    except Exception:
+        return list(SCOPES)
+    return [s for s in SCOPES if s not in granted]
 
 
 def has_token():

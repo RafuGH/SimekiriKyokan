@@ -36,6 +36,13 @@ def _build_service():
             "「Google で認可する」ボタンから認可してください。"
         )
 
+    if google_auth_helper.missing_scopes():
+        raise DriveError(
+            "現在の Google 認可には、Google Drive を使うための権限が含まれていません。\n"
+            "「Google で再認可する」ボタンからもう一度認可し、許可画面ですべての項目に"
+            "チェックを入れてください。"
+        )
+
     try:
         creds = google_auth_helper.get_creds()
         if not creds:

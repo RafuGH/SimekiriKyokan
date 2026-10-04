@@ -35,6 +35,11 @@ class GoogleAuthMixin:
             self.account_badge.refresh()
 
     def _refresh_auth_label(self):
-        ok = google_auth_helper.has_token()
-        self.auth_status_label.setText("✅ 認可済み" if ok else "❌ 未認可")
-        self.auth_btn.setEnabled(not ok)
+        ok = google_auth_helper.has_token() and not google_auth_helper.missing_scopes()
+        if google_auth_helper.has_token() and not ok:
+            self.auth_status_label.setText("⚠ 権限が不足しています（再認可してください）")
+        else:
+            self.auth_status_label.setText("✅ 認可済み" if ok else "❌ 未認可")
+        # 認可済みでも再認可できるようにする（権限不足・アカウント変更に対応）
+        self.auth_btn.setText("🔐  Google で再認可する" if google_auth_helper.has_token() else "🔐  Google で認可する")
+        self.auth_btn.setEnabled(True)

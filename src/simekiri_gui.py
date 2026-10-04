@@ -24,7 +24,7 @@ from account_badge import AccountBadge
 from google_auth_mixin import GoogleAuthMixin
 from task_scheduler import (
     APP_DIR, is_admin, get_config_path, get_task_name, generate_deadline_id,
-    register_task_admin, relaunch_as_admin, ADMIN_FLAG, check_schedule_dates,
+    register_task_admin, relaunch_as_admin, ADMIN_FLAG, check_schedule_dates, delete_watch_task,
 )
 from widgets import RowInput
 from task_manager_window import TaskManagerWindow
@@ -743,6 +743,21 @@ def _run_notify_cli(config_path):
     sys.exit(simekiri_notify.run_notify(config_path))
 
 
+def _run_watch_cli(config_path):
+    """提出フォルダ監視だけを実行する（スケジューラから定期的に呼ばれる）。"""
+    import submission_watcher
+    from datetime import datetime
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    def _log(message):
+        with open(os.path.join(APP_DIR, "simekiri_watch_log.txt"), "a", encoding="utf-8") as lf:
+            lf.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {cfg.get('title', '')}: {message}\n")
+
+    submission_watcher.check_submissions(cfg, log=_log)
+    sys.exit(0)
+
+
 def _run_admin_task_cli(config_path, delete=False):
     if not config_path or not os.path.exists(config_path):
         print("Config path missing")
@@ -758,6 +773,7 @@ def _run_admin_task_cli(config_path, delete=False):
         service = win32com.client.Dispatch("Schedule.Service")
         service.Connect()
         root = service.GetFolder("\\")
+        delete_watch_task(cfg["deadline_id"], root)
         try:
             root.DeleteTask(task_name, 0)
             print(f"削除成功: {task_name}")
@@ -783,6 +799,10 @@ if __name__ == "__main__":
             idx = sys.argv.index("--notify") + 1
             config_path = sys.argv[idx] if len(sys.argv) > idx else None
             _run_notify_cli(config_path)
+
+        elif "--watch" in sys.argv:
+            idx = sys.argv.index("--watch") + 1
+            _run_watch_cli(sys.argv[idx] if len(sys.argv) > idx else None)
 
         elif "--delete" in sys.argv:
             idx = sys.argv.index("--delete") + 1

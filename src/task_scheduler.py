@@ -14,6 +14,9 @@ os.makedirs(APP_DIR, exist_ok=True)
 
 TASK_BASE_NAME = "SimekiriKyokan"
 ADMIN_FLAG = "--admin-register"
+# 提出フォルダ監視用の定期タスク（締切通知タスクとは別。TASK_BASE_NAME で始めず一覧に混ざらないようにする）
+WATCH_TASK_PREFIX = "SimekiriWatch_"
+WATCH_INTERVAL = "PT10M"   # 10分ごと
 
 ShellExecuteW = ctypes.windll.shell32.ShellExecuteW
 
@@ -31,6 +34,10 @@ def get_config_path(deadline_id):
 
 def get_task_name(deadline_id):
     return f"{TASK_BASE_NAME}_{deadline_id}"
+
+
+def get_watch_task_name(deadline_id):
+    return f"{WATCH_TASK_PREFIX}{deadline_id}"
 
 
 def generate_deadline_id(category, end_date_str, title):
@@ -131,3 +138,57 @@ def register_task_admin(config):
     settings.ExecutionTimeLimit = "PT0S"
     root.RegisterTaskDefinition(task_name, task_def, 6, None, None, 3)
     config["task_registered"] = True
+    _register_watch_task(service, root, config)
+
+
+def delete_watch_task(deadline_id, root=None):
+    """提出フォルダ監視タスクを削除する（無ければ何もしない）。"""
+    try:
+        if root is None:
+            import win32com.client
+            service = win32com.client.Dispatch("Schedule.Service")
+            service.Connect()
+            root = service.GetFolder("\\")
+        root.DeleteTask(get_watch_task_name(deadline_id), 0)
+    except Exception:
+        pass
+
+
+def _register_watch_task(service, root, config):
+    """提出フォルダ監視が有効なら、一定間隔で --watch を実行するタスクを登録する。"""
+    deadline_id = config["deadline_id"]
+    delete_watch_task(deadline_id, root)
+    if not config.get("submission_watch_enabled"):
+        return
+
+    import submission_watcher
+    submission_watcher.reset_baseline(config)
+
+    end_date = datetime.strptime(config["end_date"], "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+    start = max(datetime.now().replace(microsecond=0), datetime.strptime(config["start_date"], "%Y-%m-%d"))
+
+    task_def = service.NewTask(0)
+    trigger = task_def.Triggers.Create(1)   # 1 = 時刻トリガー
+    trigger.StartBoundary = start.strftime("%Y-%m-%dT%H:%M:%S")
+    trigger.EndBoundary = end_date.strftime("%Y-%m-%dT%H:%M:%S")
+    trigger.Repetition.Interval = WATCH_INTERVAL
+    trigger.Enabled = True
+
+    action = task_def.Actions.Create(0)
+    config_path = get_config_path(deadline_id)
+    if getattr(sys, 'frozen', False):
+        action.Path = sys.executable
+        action.Arguments = f'--watch "{config_path}"'
+        action.WorkingDirectory = os.path.dirname(sys.executable)
+    else:
+        action.Path = sys.executable
+        action.Arguments = f'"{os.path.abspath(sys.argv[0])}" --watch "{config_path}"'
+        action.WorkingDirectory = os.path.dirname(os.path.abspath(sys.argv[0]))
+    task_def.Principal.LogonType = 3
+    task_def.Principal.RunLevel = 0
+    settings = task_def.Settings
+    settings.Enabled = True
+    settings.StartWhenAvailable = True
+    settings.MultipleInstances = 2   # 前回の実行中なら新規起動しない
+    settings.ExecutionTimeLimit = "PT10M"
+    root.RegisterTaskDefinition(get_watch_task_name(deadline_id), task_def, 6, None, None, 3)

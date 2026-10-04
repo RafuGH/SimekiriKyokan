@@ -36,11 +36,11 @@ def load_state(deadline_id: str) -> dict:
     return None
 
 
-def save_state(deadline_id: str, files: dict):
+def save_state(deadline_id: str, files: dict, target: str = ""):
     try:
         with open(_state_path(deadline_id), "w", encoding="utf-8") as f:
             json.dump(
-                {"scanned_at": datetime.now().isoformat(timespec="seconds"), "files": files},
+                {"scanned_at": datetime.now().isoformat(timespec="seconds"), "target": target, "files": files},
                 f, ensure_ascii=False, indent=2
             )
     except Exception:
@@ -149,6 +149,55 @@ def build_message(folder_label: str, new_files: list, updated_files: list, menti
     return body
 
 
+def _target_key(config: dict) -> str:
+    """監視対象の識別子。対象（フォルダ・拡張子など）が変わったら基準を取り直すために使う。"""
+    if config.get("submission_source", "local") == "drive":
+        where = "drive:" + str(config.get("submission_drive_folder_id", ""))
+    else:
+        where = "local:" + str(config.get("submission_folder", "")) + ":" + str(config.get("submission_recursive", True))
+    return where + ":" + ",".join(parse_extensions(config.get("submission_extensions", "")))
+
+
+def _scan(config: dict):
+    """設定に従って現在のファイル一覧を取得する。(files, folder_label) を返す。"""
+    if config.get("submission_source", "local") == "drive":
+        folder_id = config.get("submission_drive_folder_id", "")
+        current = scan_drive_folder(folder_id)
+        exts = parse_extensions(config.get("submission_extensions", ""))
+        if exts:
+            current = {n: i for n, i in current.items() if os.path.splitext(n)[1].lower() in exts}
+        return current, config.get("submission_drive_folder_name", "") or folder_id
+    folder = config.get("submission_folder", "")
+    current = scan_folder(
+        folder,
+        recursive=config.get("submission_recursive", True),
+        extensions=config.get("submission_extensions", ""),
+    )
+    return current, os.path.basename(os.path.normpath(folder)) or folder
+
+
+def reset_baseline(config: dict, log=print) -> bool:
+    """
+    登録・保存時に、現時点のファイル一覧を基準として記録する。
+    これにより「登録した後に置かれたファイル」から通知される（最初の定時実行を待たない）。
+    対象が前回と同じで基準が既にあれば何もしない。
+    """
+    if not config.get("submission_watch_enabled"):
+        return False
+    deadline_id = config.get("deadline_id", "default")
+    previous = load_state(deadline_id)
+    if previous is not None and previous.get("target") == _target_key(config):
+        return False
+    try:
+        current, _label = _scan(config)
+    except Exception as e:
+        log(f"提出フォルダの基準を記録できませんでした: {e}")
+        return False
+    save_state(deadline_id, current, _target_key(config))
+    log(f"提出フォルダの基準を記録しました（{len(current)}件）")
+    return True
+
+
 def check_submissions(config: dict, log=print) -> dict:
     """
     設定に従って提出フォルダを確認し、新規/更新ファイルがあれば通知する。
@@ -198,14 +247,14 @@ def check_submissions(config: dict, log=print) -> dict:
     result["checked"] = True
 
     previous_state = load_state(deadline_id)
-    if previous_state is None:
-        save_state(deadline_id, current)
+    if previous_state is None or previous_state.get("target", _target_key(config)) != _target_key(config):
+        save_state(deadline_id, current, _target_key(config))
         log(f"提出フォルダの初回スキャンを記録しました（{len(current)}件、通知はしません）")
         return result
 
     new_files, updated_files = detect_changes(previous_state["files"], current)
     result["new"], result["updated"] = new_files, updated_files
-    save_state(deadline_id, current)
+    save_state(deadline_id, current, _target_key(config))
 
     if not new_files and not updated_files:
         log("提出フォルダに変化はありません")

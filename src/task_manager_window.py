@@ -17,6 +17,7 @@ import simekiri_notify
 from theme import apply_theme
 from task_scheduler import (
     TASK_BASE_NAME, get_config_path, get_simekiri_tasks, is_admin, relaunch_as_admin,
+    delete_watch_task,
 )
 from task_edit_dialog import TaskEditDialog
 
@@ -164,6 +165,7 @@ class TaskManagerWindow(QWidget):
             service = win32com.client.Dispatch("Schedule.Service")
             service.Connect()
             service.GetFolder("\\").DeleteTask(task_name, 0)
+            delete_watch_task(deadline_id)
             if os.path.exists(config_path):
                 os.remove(config_path)
             QMessageBox.information(self, "削除完了", "削除しました")
